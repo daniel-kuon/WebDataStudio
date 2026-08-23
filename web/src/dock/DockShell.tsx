@@ -16,7 +16,7 @@ import { isAdmin, useRole } from "../auth/useRole";
 import { ExplorerTree, type ExplorerAction, type ExplorerSelection } from "../explorer/ExplorerTree";
 import { ObjectDetailPanel } from "../explorer/ObjectDetailPanel";
 import { QueryTab } from "../query/QueryTab";
-import { DataTab } from "../data/DataTab";
+import { DataTab, foreignKeyRef, type FkNavMode } from "../data/DataTab";
 import { HistoryPanel } from "../query/HistoryPanel";
 import { PlanPanel, HealthReportPanel } from "../plan/PlanPanel";
 import { TableDesigner } from "../designer/TableDesigner";
@@ -42,8 +42,9 @@ import {
   selectColumn,
 } from "../sql/objectScripts";
 import {
-  applyDdl, describeObject, listConnections, loadTabs, previewRename, saveTabs,
-  type Connection, type ForeignKeyDto,
+  applyDdl, describeObject, listConnections, loadTabs, loadWorkspaceItem, previewRename, saveTabs,
+  saveWorkspaceItem,
+  type BrowseFilter, type Connection, type ForeignKeyDto, type ReferencingKeyDto,
 } from "../api";
 import { ExportDialog, type ExportTarget } from "../export/ExportDialog";
 import { CopyTableDialog, ImportDialog, type ImportTarget } from "../import/ImportDialog";
@@ -59,6 +60,8 @@ interface DesignerTabState {
 
 interface DataTabState {
   id: string; connectionId: string; objectRef: string; tableName: string; foreignKeys: ForeignKeyDto[];
+  /// Filters the tab opens with — how a followed foreign key lands on the referenced rows.
+  initialFilters?: BrowseFilter[];
 }
 
 interface ShellState {
@@ -72,6 +75,11 @@ interface ShellState {
   exportQuery: (connectionId: string, sql: string) => void;
   exportObject: (connectionId: string, objectRef: string, label: string) => void;
   followForeignKey: (from: DataTabState, fk: ForeignKeyDto, value: unknown) => void;
+  openReferencing: (from: DataTabState, key: ReferencingKeyDto, values: unknown[]) => void;
+  /// How followed keys open their target — one setting for every data tab, persisted with the
+  /// workspace so it survives a reload.
+  fkNavMode: FkNavMode;
+  setFkNavMode: (mode: FkNavMode) => void;
   runStatement: (connectionId: string, sql: string) => void;
   openData: (connectionId: string, objectRef: string, tableName: string) => void;
   dialectOf: (connectionId: string) => DialectId;
@@ -139,7 +147,11 @@ function DataPanel(props: IDockviewPanelProps<{ tabId: string }>) {
       objectRef={tab.objectRef}
       tableName={tab.tableName}
       foreignKeys={tab.foreignKeys}
+      initialFilters={tab.initialFilters}
+      fkNavMode={shell.fkNavMode}
+      onFkNavModeChange={shell.setFkNavMode}
       onFollowForeignKey={(fk, value) => shell.followForeignKey(tab, fk, value)}
+      onOpenReferencing={(key, values) => shell.openReferencing(tab, key, values)}
       onExport={() => shell.exportObject(tab.connectionId, tab.objectRef, tab.tableName)} />
   );
 }
@@ -569,26 +581,86 @@ export function DockShell() {
     });
   }, []);
 
-  const openData = useCallback(async (connectionId: string, objectRef: string, tableName: string) => {
+  const openData = useCallback(async (connectionId: string, objectRef: string, tableName: string,
+    options?: { filters?: BrowseFilter[]; splitFrom?: string }) => {
     const detail = await describeObject(connectionId, objectRef).catch(() => null);
     const tab: DataTabState = {
       id: "d" + Date.now().toString(36),
       connectionId, objectRef, tableName,
       foreignKeys: detail?.foreignKeys ?? [],
+      initialFilters: options?.filters,
     };
     setDataTabs(list => [...list, tab]);
+
+    // A split lands next to the tab it was followed from, so a chain of follows — order to
+    // customer to country — reads left to right. Everything else joins the centre group.
+    const splitFrom = options?.splitFrom && api.current?.getPanel(options.splitFrom)
+      ? options.splitFrom
+      : null;
+
     api.current?.addPanel({
       id: tab.id, component: "data", title: tableName, params: { tabId: tab.id },
-      position: centerGroup.current ? { referenceGroup: centerGroup.current } : undefined,
+      position: splitFrom
+        ? { referencePanel: splitFrom, direction: "right" }
+        : centerGroup.current ? { referenceGroup: centerGroup.current } : undefined,
     });
   }, []);
 
-  // Following a foreign key lands on the referenced row itself, not on the whole table.
+  // How followed foreign keys open their target. Kept with the workspace, like the tabs, so the
+  // choice survives a reload and every data tab agrees.
+  const [fkNavMode, setFkNavModeState] = useState<FkNavMode>("query");
+
+  useEffect(() => {
+    loadWorkspaceItem<FkNavMode>("fk-nav-mode")
+      .then(mode => {
+        if (mode === "query" || mode === "tab" || mode === "split") setFkNavModeState(mode);
+      })
+      .catch(() => { /* an unset preference is the default */ });
+  }, []);
+
+  const setFkNavMode = useCallback((mode: FkNavMode) => {
+    setFkNavModeState(mode);
+    saveWorkspaceItem("fk-nav-mode", mode).catch(() => {});
+  }, []);
+
+  // Following a foreign key lands on the referenced row itself, not on the whole table — as the
+  // SELECT it always was, or as a filtered data tab, plain or split, per the configured mode.
   const followForeignKey = useCallback((from: DataTabState, fk: ForeignKeyDto, value: unknown) => {
-    const literal = typeof value === "number" ? String(value) : "'" + String(value).replace(/'/g, "''") + "'";
-    newTab(from.connectionId,
-      "SELECT * FROM " + fk.referencedTable + " WHERE " + fk.referencedColumns[0] + " = " + literal);
-  }, [newTab]);
+    if (fkNavMode === "query") {
+      const literal = typeof value === "number" ? String(value) : "'" + String(value).replace(/'/g, "''") + "'";
+      newTab(from.connectionId,
+        "SELECT * FROM " + fk.referencedTable + " WHERE " + fk.referencedColumns[0] + " = " + literal);
+      return;
+    }
+
+    void openData(from.connectionId, foreignKeyRef(fk), fk.referencedTable, {
+      filters: [{ column: fk.referencedColumns[0], op: "eq", value: String(value ?? "") }],
+      splitFrom: fkNavMode === "split" ? from.id : undefined,
+    });
+  }, [fkNavMode, newTab, openData]);
+
+  // The other direction: the rows of a referencing table that point at one row here. Opens the
+  // same way a followed key does, so the two reads of a relation share one setting.
+  const openReferencing = useCallback((from: DataTabState, key: ReferencingKeyDto, values: unknown[]) => {
+    if (fkNavMode === "query") {
+      const table = key.schema ? `${key.schema}.${key.table}` : key.table;
+      const where = key.columns.map((column, index) => {
+        const value = values[index];
+        return value === null || value === undefined ? `${column} IS NULL`
+          : typeof value === "number" ? `${column} = ${value}`
+          : `${column} = '${String(value).replace(/'/g, "''")}'`;
+      }).join(" AND ");
+      newTab(from.connectionId, `SELECT * FROM ${table} WHERE ${where}`);
+      return;
+    }
+
+    void openData(from.connectionId, key.tableRef, key.table, {
+      filters: key.columns.map((column, index) => ({
+        column, op: "eq" as const, value: String(values[index] ?? ""),
+      })),
+      splitFrom: fkNavMode === "split" ? from.id : undefined,
+    });
+  }, [fkNavMode, newTab, openData]);
 
   // Qualifies an object the way its engine expects, so a generated SELECT runs as-is.
   const qualify = useCallback((connectionId: string, ref: string) => {
@@ -1044,6 +1116,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
     <ShellContext.Provider value={{
       connections,
       selection, tabs, dataTabs, designerTabs, updateSql, openObject, exportQuery, followForeignKey,
+      openReferencing, fkNavMode, setFkNavMode,
       runStatement, openData, dialectOf, exportObject,
       explorer: {
         nonce: explorerNonce,

@@ -190,6 +190,39 @@ export const browseData = (conn: string, ref: string,
   return fetch(`${base}/data/${conn}?${refQuery(ref, query)}`).then(r => ok<DataPageDto>(r));
 };
 
+// --- the query bar's browse ------------------------------------------------------
+export type BrowseOp =
+  | "contains" | "startswith" | "endswith"
+  | "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "null" | "notnull";
+export interface BrowseFilter { column: string; op: BrowseOp; value?: string }
+export interface BrowseSort { column: string; desc?: boolean }
+export interface BrowseAggregate { function: "count" | "sum" | "avg" | "min" | "max"; column?: string | null }
+export interface BrowseRequest {
+  offset?: number; limit?: number; reveal?: boolean;
+  filters?: BrowseFilter[];
+  sort?: BrowseSort[];
+  /// Names of the table's own foreign keys to LEFT JOIN; the referenced columns arrive prefixed.
+  joins?: string[];
+  groupBy?: string[];
+  aggregates?: BrowseAggregate[];
+}
+
+/// The same page browseData answers, with several filters, several sort columns, joins along the
+/// table's foreign keys and grouping. A POST because the request is a structure — it reads only.
+export const browseTable = (conn: string, ref: string, body: BrowseRequest):
+  Promise<DataPageDto & { grouped?: boolean }> =>
+  fetch(`${base}/data/${conn}/browse?${refQuery(ref)}`, json("POST", body))
+    .then(r => ok<DataPageDto & { grouped?: boolean }>(r));
+
+/// A foreign key of another table that points at this one: who references these rows.
+export interface ReferencingKeyDto {
+  name: string; schema: string; table: string; tableRef: string;
+  columns: string[]; referencedColumns: string[];
+}
+
+export const referencingKeys = (conn: string, ref: string): Promise<ReferencingKeyDto[]> =>
+  fetch(`${base}/schema/${conn}/referencing?${refQuery(ref)}`).then(r => ok<ReferencingKeyDto[]>(r));
+
 export interface StudioUserDto {
   name: string; role: string; connections: string[]; hashed: boolean;
 }

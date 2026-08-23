@@ -1,7 +1,9 @@
+using WebDataStudio.Server.Ddl;
 using WebDataStudio.Server.Drivers;
 using WebDataStudio.Server.Drivers.Abstractions;
 using WebDataStudio.Server.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace WebDataStudio.Server.Endpoints;
 
@@ -94,6 +96,64 @@ public static class SchemaEndpoints
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
+
+        // The other direction of DescribeAsync's foreign keys: who points at this table. An object
+        // only knows its own keys, so the whole schema is read once — cached briefly, the way the
+        // diagram already reads it — and every table's keys are checked against the target.
+        app.MapGet("/api/schema/{conn}/referencing", async (string conn,
+            [FromQuery(Name = "ref")] string objectRef, SessionFactory factory, IMemoryCache cache,
+            CancellationToken ct) =>
+        {
+            try
+            {
+                var target = ParseObjectRef(objectRef);
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    var tables = await cache.GetOrCreateAsync($"referencing:{conn}", async entry =>
+                    {
+                        entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(60);
+                        return await CompareEndpoints.ReadSchemaAsync(driver, session, null, ct);
+                    }) ?? [];
+
+                    var targetSchema = target.Path.Count > 1 ? target.Path[0] : "";
+                    var keys = tables.SelectMany(table => table.Constraints
+                        .Where(constraint => constraint.Kind == ConstraintKind.ForeignKey
+                            && constraint.ReferencedTable is not null
+                            && References(constraint.ReferencedTable, table.Schema, targetSchema, target.Name))
+                        .Select(constraint => new
+                        {
+                            name = constraint.Name,
+                            schema = table.Schema,
+                            table = table.Name,
+                            tableRef = table.Schema is { Length: > 0 }
+                                ? $"Table:{table.Schema}/{table.Name}"
+                                : $"Table:{table.Name}",
+                            columns = constraint.Columns,
+                            referencedColumns = constraint.ReferencedColumns ?? [],
+                        }));
+
+                    return Results.Ok(keys);
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+    }
+
+    /// Whether a foreign key's referenced table is the asked-for one. A referenced table without a
+    /// schema means "the owner's schema"; a schema is only compared when both sides have one, so an
+    /// engine that qualifies and one that does not still agree about the same table.
+    private static bool References(string referenced, string ownerSchema, string targetSchema, string targetName)
+    {
+        var dot = referenced.IndexOf('.');
+        var schema = dot > 0 ? referenced[..dot] : ownerSchema;
+        var name = dot > 0 ? referenced[(dot + 1)..] : referenced;
+
+        if (!name.Equals(targetName, StringComparison.OrdinalIgnoreCase)) return false;
+        return schema.Length == 0 || targetSchema.Length == 0
+            || schema.Equals(targetSchema, StringComparison.OrdinalIgnoreCase);
     }
 
     /// Routing decodes every percent-escape in a route value except %2F, which stays encoded so a

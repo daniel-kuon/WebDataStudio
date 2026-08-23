@@ -122,6 +122,9 @@ Status is one of `done`, `partial: <what is missing>` or `not-supported: <engine
 | F23.1 | The data tab's column menu: a filter that takes the focus, debounced against the server, and hidden columns with an indicator | done | all | Data tab |
 | F23.2 | The explorer box searches tables and views by subsequence, ranked, with the schema as context | done | all | Explorer |
 | F23.3 | Tab context menu: close, close others, close to the right, close all, pin, maximise, and a panel in its own window | done | all | Shell, tab strip |
+| F23.4 | The data tab's query bar: several filters with operators, multi-column ordering, joins along the table's foreign keys, grouping with aggregates — built on the server, shown in the same grid | done | all | Data tab |
+| F23.5 | Following a foreign key is configurable: a query tab (the default), a filtered data tab, or a split next to the tab it was followed from — a chain of follows opens further splits | done | all | Data tab, shell |
+| F23.6 | Referencing rows: what points at a row is listed per incoming foreign key, expanded inline under the row — one key, several, or all — or opened like a followed key | done | all | Data tab |
 | F19.1 | Key browser: SCAN with a cursor, pattern and type filter on the server, size and TTL per key | done | redis | Redis panel, keys tab |
 | F19.2 | An editor per value type — string with format detection, hash, list, set, sorted set, stream | done | redis | Redis panel, keys tab |
 | F19.3 | Every write previewed as the Redis commands it will run, TTL set or removed per key | done | redis | Redis panel, keys tab |

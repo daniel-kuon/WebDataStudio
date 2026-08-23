@@ -4,6 +4,7 @@
 - [Erste Schritte](/de/getting-started.md)
 - [Umgebungsvariablen](/de/environment.md)
 - [Verbindungen](/de/connections.md)
+- [Daten durchsuchen](/de/browsing.md)
 - [Abfrage-Editor](/de/editor.md)
 - [Ergebnisse und Export](/de/results.md)
 - [Daten bearbeiten](/de/editing.md)

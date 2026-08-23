@@ -13,6 +13,14 @@ public static class DataEndpoints
     public record MaskPolicyRequest(bool? MaskByDefault, string[]? Extra, string[]? Never);
     public record GenerateDto(int? Rows, Dictionary<string, string>? Strategies, int? Seed);
 
+    public record BrowseFilterDto(string Column, string? Op, string? Value);
+    public record BrowseSortDto(string Column, bool? Desc);
+    public record BrowseAggregateDto(string Function, string? Column);
+    public record BrowseRequestDto(
+        int? Offset, int? Limit, bool? Reveal,
+        List<BrowseFilterDto>? Filters, List<BrowseSortDto>? Sort, List<string>? Joins,
+        List<string>? GroupBy, List<BrowseAggregateDto>? Aggregates);
+
     public record ChangeDto(string Kind, Dictionary<string, JsonElement> Key, Dictionary<string, JsonElement> Values);
     public record ChangeRequest(List<ChangeDto> Changes);
     public record ApplyRequest(string Hash);
@@ -112,6 +120,126 @@ public static class DataEndpoints
                         totalEstimate = detail.RowCount,
                         offset = skip,
                         limit = take,
+                    });
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
+        // The query bar's browse: the same page the GET answers, but with several filters, several
+        // sort columns, joins along the table's own foreign keys, and grouping with aggregates.
+        // A POST because the request is a structure, not three scalars — and it changes nothing.
+        app.MapPost("/api/data/{conn}/browse", async (string conn, [FromQuery(Name = "ref")] string objectRef,
+            BrowseRequestDto body, SessionFactory factory, MaskPolicyStore policies, CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    if (!driver.Caps.TabularBrowse)
+                        return Results.BadRequest(new
+                        {
+                            message = $"{driver.Info.Label} has no rows to browse; open the key in " +
+                                      "the key browser instead",
+                        });
+
+                    var target = SchemaEndpoints.ParseObjectRef(objectRef);
+                    var detail = await driver.DescribeAsync(session, target, ct);
+                    var identity = RowIdentity.Resolve(detail);
+
+                    // A join can only follow a foreign key this table declares: the key is schema,
+                    // not input, so the joined table and its ON clause cannot be made up.
+                    var selectedKeys = new List<ForeignKeyInfo>();
+                    foreach (var name in body.Joins ?? [])
+                    {
+                        var key = detail.ForeignKeys.FirstOrDefault(fk =>
+                            fk.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                        if (key is null)
+                            return Results.BadRequest(new
+                            {
+                                message = $"this table has no foreign key '{name}'"
+                                          + (detail.ForeignKeys.Count > 0
+                                              ? $"; it has {string.Join(", ", detail.ForeignKeys.Select(fk => fk.Name))}"
+                                              : ""),
+                            });
+                        if (!selectedKeys.Contains(key)) selectedKeys.Add(key);
+                    }
+
+                    var joins = new List<BrowseQuery.ResolvedJoin>();
+                    foreach (var key in selectedKeys)
+                        joins.Add(new BrowseQuery.ResolvedJoin(key,
+                            BrowseQuery.LabelFor(key, selectedKeys),
+                            await driver.DescribeAsync(session,
+                                BrowseQuery.ReferencedRef(key, detail.Ref), ct)));
+
+                    var input = new BrowseQueryInput(
+                        [.. (body.Filters ?? []).Select(f => new BrowseFilter(f.Column, f.Op ?? "contains", f.Value))],
+                        [.. (body.Sort ?? []).Select(s => new BrowseSort(s.Column, s.Desc == true))],
+                        [.. selectedKeys.Select(k => k.Name)],
+                        body.GroupBy ?? [],
+                        [.. (body.Aggregates ?? []).Select(a => new BrowseAggregate(a.Function, a.Column))]);
+
+                    var grouped = input.GroupBy.Count > 0 || input.Aggregates.Count > 0;
+                    var take = Math.Clamp(body.Limit ?? defaultLimit, 1, 100_000);
+                    var skip = Math.Max(body.Offset ?? 0, 0);
+
+                    var (text, parameters) = BrowseQuery.Build(
+                        ChangeScriptBuilder.Qualify(target, driver.Dialect), detail, joins, input,
+                        driver.Dialect, CharType(driver));
+
+                    var sql = driver.Dialect.Paginate(text, skip, take);
+                    var request = new ScriptRequest(sql, take, timeout, Parameters: parameters);
+
+                    var columns = new List<ColumnMeta>();
+                    var rows = new List<object?[]>();
+                    string? error = null;
+
+                    await foreach (var chunk in driver.ExecuteAsync(session, request, ct))
+                    {
+                        switch (chunk)
+                        {
+                            case ResultChunk.Columns c: columns = c.Items.ToList(); break;
+                            case ResultChunk.Rows r: rows.AddRange(r.Items); break;
+                            case ResultChunk.Error e: error = e.Text; break;
+                        }
+                    }
+
+                    if (error is not null) return Results.Json(new { message = error }, statusCode: 502);
+
+                    // A joined column is named "customers.email"; the policy knows it as "email".
+                    // Checking both keeps a mask from silently falling off behind a join.
+                    var policy = policies.For(conn);
+                    var masked = body.Reveal == true
+                        ? []
+                        : columns.Select((column, index) => (column, index))
+                            .Where(entry => SensitiveColumns.ShouldMask(entry.column.Name, policy)
+                                || (entry.column.Name.LastIndexOf('.') is var dot && dot >= 0
+                                    && SensitiveColumns.ShouldMask(entry.column.Name[(dot + 1)..], policy)))
+                            .Select(entry => entry.index)
+                            .ToHashSet();
+
+                    // A joined or grouped page has no one row per table row to write back to;
+                    // filters and sorting change nothing about what a row is, so they keep editing.
+                    var editable = identity.Editable && !session.Spec.ReadOnly && !grouped && joins.Count == 0;
+                    var reason = session.Spec.ReadOnly ? "this connection is read-only"
+                        : grouped ? "a grouped view cannot be edited; clear the grouping to edit"
+                        : joins.Count > 0 ? "a joined view cannot be edited; remove the joins to edit"
+                        : identity.Reason;
+
+                    return Results.Ok(new
+                    {
+                        columns = Masking.Describe(columns, masked),
+                        rows = Masking.Apply(rows, masked),
+                        editable,
+                        keyColumns = identity.KeyColumns,
+                        reason,
+                        totalEstimate = grouped ? null : detail.RowCount,
+                        offset = skip,
+                        limit = take,
+                        grouped,
                     });
                 }
             }

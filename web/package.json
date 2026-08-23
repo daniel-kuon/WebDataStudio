@@ -15,6 +15,7 @@
     "smoke:tree": "node scripts/smoke-tree.mjs",
     "smoke:login": "node scripts/smoke-login.mjs",
     "smoke:data": "node scripts/smoke-data.mjs",
+    "smoke:browse": "node scripts/smoke-browse.mjs",
     "smoke:layout": "node scripts/smoke-layout.mjs",
     "smoke:grid": "node scripts/smoke-grid.mjs",
     "smoke:proxy": "node scripts/smoke-proxy.mjs",
