@@ -237,6 +237,51 @@ public class BrowseQueryEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_expr_filter_speaks_the_column_box_language()
+    {
+        using var factory = Factory();
+        var client = factory.CreateClient();
+        var conn = await ConnectionIdAsync(client);
+
+        // `>10 <30` on a number, and `=open,=paid` from the distinct list on text.
+        var range = await BrowseAsync(client, conn, new
+        {
+            filters = new object[] { new { column = "amount", op = "expr", value = ">10 <30" } },
+        });
+        Assert.Equal(2, range.GetProperty("rows").GetArrayLength());
+
+        var list = await BrowseAsync(client, conn, new
+        {
+            filters = new object[] { new { column = "state", op = "expr", value = "=open,=paid" } },
+        });
+        Assert.Equal(5, list.GetProperty("rows").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task A_borrowed_column_rides_along_and_stays_read_only()
+    {
+        using var factory = Factory();
+        var client = factory.CreateClient();
+        var conn = await ConnectionIdAsync(client);
+
+        var page = await BrowseAsync(client, conn, new { lookups = new[] { "customer_id.name" } });
+
+        var names = ColumnNames(page);
+        var borrowed = Array.IndexOf(names, "customer_id.name");
+        Assert.True(borrowed >= 0);
+        Assert.Equal("customer_id.name",
+            Assert.Single(page.GetProperty("lookups").EnumerateArray()).GetString());
+
+        // Borrowing changes what is shown, not what a row is: the table stays editable.
+        Assert.True(page.GetProperty("editable").GetBoolean());
+        Assert.Equal("ada", page.GetProperty("rows")[0][borrowed].GetString());
+
+        // A spec that resolves to nothing is skipped, not an error.
+        var skipped = await BrowseAsync(client, conn, new { lookups = new[] { "nope.name" } });
+        Assert.Equal(0, skipped.GetProperty("lookups").GetArrayLength());
+    }
+
+    [Fact]
     public async Task Referencing_answers_who_points_at_a_table()
     {
         using var factory = Factory();

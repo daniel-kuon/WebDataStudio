@@ -29,11 +29,14 @@ export interface CommandContext {
   openInBuilder: () => void;
   openNotebook: () => void;
   openFederation: () => void;
+  openPerspective: () => void;
+  openArchives: () => void;
   switchTheme: () => void;
   saveLayout: () => void;
   resetLayout: () => void;
   copyLink: () => void;
   showShortcuts: () => void;
+  openPreferences: () => void;
 }
 
 /// One registry, read by both the palette and the shortcut help. A command can never appear in
@@ -57,6 +60,8 @@ export function buildCommands(context: CommandContext): Command[] {
     { id: "explorer.goto", label: "Go to object", group: "Connections", shortcut: "Ctrl+Shift+O", run: context.goToObject },
 
     { id: "tool.diagram", label: "Open ER diagram", group: "Tools", shortcut: "Ctrl+D", run: context.openDiagram },
+    { id: "tool.perspective", label: "Open perspective — a row and everything related to it", group: "Tools", run: context.openPerspective },
+    { id: "tool.archives", label: "Open archives — results kept as files", group: "Tools", run: context.openArchives },
     { id: "tool.health", label: "Open health report", group: "Tools", run: context.openHealth },
     { id: "tool.admin", label: "Open administration", group: "Tools", run: context.openAdmin },
     { id: "tool.compare", label: "Open compare", group: "Tools", run: context.openCompare },
@@ -71,6 +76,7 @@ export function buildCommands(context: CommandContext): Command[] {
     { id: "view.resetLayout", label: "Reset layout", group: "View", shortcut: "Ctrl+L then 0", run: context.resetLayout },
     { id: "view.copyLink", label: "Copy link to this object", group: "View", run: context.copyLink },
     { id: "view.shortcuts", label: "Keyboard shortcuts", group: "View", shortcut: "?", run: context.showShortcuts },
+    { id: "view.preferences", label: "Preferences", group: "View", shortcut: "Ctrl+,", run: context.openPreferences },
   ];
 }
 

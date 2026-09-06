@@ -160,3 +160,25 @@ Status is one of `done`, `partial: <what is missing>` or `not-supported: <engine
 | F24.5 | Scheduled read-only queries exported to files, on an interval or daily, with the last run per job on an endpoint | done | all | Environment |
 | F24.6 | A result kept as a snapshot behind a random link, masked before storage, expiring, public only on purpose | done | all | Result area, share page |
 | F24.7 | The studio's own traces and metrics over OTLP: a span per run and per tool call, counters for statements, rows and tool calls | done | all | Environment |
+| F25.1 | Statistics per object: size, rows, dead rows, last vacuum and analyze, and every index with its size and scan count | done | postgresql, mysql, sqlserver, oracle | Structure panel, statistics tab |
+| F25.2 | Privileges per object, with GRANT and REVOKE built as statements that go through the migration preview | done | postgresql, mysql, sqlserver, oracle | Structure panel, privileges tab |
+| F25.3 | Dependencies per object — what breaks if this changes, and what this needs | done | all | Structure panel, dependencies tab |
+| F25.4 | The object as a CREATE statement, to copy or open in a query tab | done | all | Structure panel, SQL tab |
+| F25.5 | Plan findings for a spilled sort and a nested loop carrying many rows | done | postgresql, mysql, sqlserver, oracle | Plan panel |
+| F26.1 | Extensions, roles, tablespaces, publications, subscriptions and types in the tree, next to the schemas | done | postgresql | Explorer |
+| F26.2 | GRANT or REVOKE for every table in a schema in one script, optionally for tables created later | done | postgresql, mysql, sqlserver, oracle | Explorer, schema menu |
+| F26.3 | REFRESH MATERIALIZED VIEW, plain or CONCURRENTLY, refused on anything that is not one | done | postgresql, oracle | Explorer, materialised view menu |
+| F26.4 | The dashboard's numbers as lines over five, fifteen or thirty minutes | done | all | Admin panel, overview |
+| F26.5 | Backup format, compression, no-owner and clean, with the bytes counted as they arrive | partial: format and its flags are pg_dump's; the other tools refuse them rather than ignore them | postgresql, mysql, mongodb, redis, sqlite, sqlserver | Admin panel, backup |
+| F26.6 | A function's source, parameters and a run inside a rolled-back transaction, with its notices and timing | partial: not a stepping debugger — no breakpoints and no variable inspection | postgresql | Structure panel, inspect tab |
+| F26.7 | Row-level security and its policies, created and dropped as statements | done | postgresql | Structure panel, policies tab |
+| F26.8 | A partitioned table's pieces with their bounds and sizes, and ATTACH or DETACH as statements | done | postgresql | Structure panel, partitions tab |
+| F26.9 | Preferences in the workspace: page size, snapshots, and a new binding for any command | done | all | Preferences dialog |
+| F26.10 | A history entry that keeps its result, reopened as a grid | done | all | History panel |
+| F27.1 | A filter language in every column box: `^starts`, `$ends`, `+has`, `~hasn't`, `=`, `!=`, `>`, `<=`, `NULL`, `EMPTY`, `TODAY`, `LAST MONTH`, `2026-08`, quoted values, space for AND, comma for OR | done | all | Data tab, result grid |
+| F27.2 | The distinct values of a column with their counts, as checkboxes that write the filter | done | all | Data tab, column menu |
+| F27.3 | A column borrowed from the table a foreign key points at, joined server-side and read-only | done | all | Data tab, column menu |
+| F27.4 | A nested view over related rows: what this row points at, what points back, as deep as it is opened | partial: single-column keys only, and one page per level | all | Perspective panel |
+| F27.5 | Results kept as NDJSON files on the studio's disk, listed, reopened as a grid, and scripted back as INSERTs | done | all | Archive panel, result area, explorer |
+| F27.6 | GeoJSON, WKT or a latitude/longitude pair drawn to scale | partial: no basemap — a container has no tile server, and the studio will not reach out to one on its own | all | Result area, map view |
+| F27.7 | `EXISTS` and `NOT EXISTS` over a table that is not in the query | done | all | Query builder |

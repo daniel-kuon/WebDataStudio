@@ -23,6 +23,28 @@ cd web && npm install && npm run dev
 The published container serves the built SPA from the same origin, so there is no CORS
 configuration anywhere.
 
+## The demo data, and the screenshots
+
+The browser checks and the screenshots run against two seeded connections. The studio seeds itself:
+point `WDS_SEED_SQL` at `web/scripts/demo-data`, which holds one file per connection name.
+
+```bash
+ASPNETCORE_URLS=http://localhost:5005 DB_PATH=/tmp/wds/wds.db \
+  WDS_CONN_DEMO="sqlite:////tmp/wds/demo.db" \
+  WDS_CONN_PG="postgres://postgres:pw@localhost:5432/postgres" \
+  WDS_SEED_SQL=web/scripts/demo-data \
+  dotnet run --project src/WebDataStudio.Server
+
+cd web && node scripts/screenshots.mjs      # both themes, into docs/assets/screenshots
+```
+
+`DEMO.sql` is people, orders, items and places — enough for a join, a chart and a map. `PG.sql` adds
+what only PostgreSQL has: a table with row-level security and two policies, a partitioned table, a
+materialised view, a `plpgsql` function that raises a notice, an extension, a role and an enum.
+
+The PostgreSQL shots are skipped when there is no such connection, so the script still finishes with
+SQLite alone — it just captures fewer files.
+
 ## Tests
 
 ```bash
@@ -32,6 +54,8 @@ cd web && npm run smoke          # browser check against a running server
 cd web && npm run smoke:admin    # diagram, administration and comparison panels
 cd web && npm run smoke:p9       # palette, saved queries, builder, charts, parameters
 cd web && npm run smoke:mcp      # the MCP endpoint and its dialog (needs WDS_MCP_ENABLED=true)
+cd web && npm run smoke:objects  # policies, partitions, a function run, preferences, snapshots
+cd web && npm run smoke:dbgate   # the filter language, archives, perspective, the map
 ```
 
 The server suite runs one behaviour suite against every engine fixture, so a driver that is added

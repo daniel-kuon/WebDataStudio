@@ -131,11 +131,25 @@ export const describeObject = (conn: string, ref: string): Promise<ObjectDetailD
 export interface HistoryEntryDto {
   id: number; connectionId: string; sql: string; executedAt: string;
   elapsedMs: number | null; rowCount: number | null; error: string | null;
+  /// Whether the result was kept with the entry. The rows are fetched separately — a history list
+  /// would otherwise carry every snapshot it ever took.
+  hasSnapshot: boolean;
 }
 export interface HistoryInput {
   connectionId: string; sql: string;
   elapsedMs: number | null; rowCount: number | null; error: string | null;
+  snapshot?: string;
 }
+
+export interface ResultSnapshot {
+  columns: string[];
+  rows: unknown[][];
+  /// True when the result had more rows than the snapshot keeps.
+  truncated: boolean;
+}
+
+export const historySnapshot = (id: number): Promise<ResultSnapshot> =>
+  fetch(`${base}/history/${id}/snapshot`).then(r => ok<ResultSnapshot>(r));
 
 export const listHistory = (params: { connectionId?: string; search?: string; limit?: number } = {}):
   Promise<HistoryEntryDto[]> => {
@@ -175,6 +189,9 @@ export interface DataPageDto {
   totalEstimate: number | null;
   offset: number;
   limit: number;
+  /// Column names that came from the table a foreign key points at. Read-only: an edit here would
+  /// be an update to a row this grid is not addressing.
+  lookups?: string[];
 }
 export interface ChangePreviewDto {
   hash: string; script: string; statementCount: number; destructive: boolean;
@@ -183,17 +200,25 @@ export interface LookupItemDto { value: unknown; label: unknown }
 
 export const browseData = (conn: string, ref: string,
   params: { offset?: number; limit?: number; sort?: string; desc?: boolean;
-            filterColumn?: string; filter?: string; reveal?: boolean } = {}): Promise<DataPageDto> => {
+            filterColumn?: string; filter?: string; reveal?: boolean;
+            /// "customer_id.name": a column from the table that foreign key points at.
+            lookups?: string[] } = {}): Promise<DataPageDto> => {
   const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params))
+  for (const [key, value] of Object.entries(params)) {
+    if (key === "lookups") continue;
     if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  // Repeated rather than joined: each one is its own value, and a column name may hold a comma.
+  for (const lookup of params.lookups ?? []) query.append("lookup", lookup);
   return fetch(`${base}/data/${conn}?${refQuery(ref, query)}`).then(r => ok<DataPageDto>(r));
 };
 
 // --- the query bar's browse ------------------------------------------------------
 export type BrowseOp =
   | "contains" | "startswith" | "endswith"
-  | "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "null" | "notnull";
+  | "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "null" | "notnull"
+  /// The column box's small filter language: the value is the whole expression ("=a,=b", ">10").
+  | "expr";
 export interface BrowseFilter { column: string; op: BrowseOp; value?: string }
 export interface BrowseSort { column: string; desc?: boolean }
 export interface BrowseAggregate { function: "count" | "sum" | "avg" | "min" | "max"; column?: string | null }
@@ -205,6 +230,8 @@ export interface BrowseRequest {
   joins?: string[];
   groupBy?: string[];
   aggregates?: BrowseAggregate[];
+  /// Borrowed columns, "customer_id.name" each — the same spelling browseData's lookups take.
+  lookups?: string[];
 }
 
 /// The same page browseData answers, with several filters, several sort columns, joins along the
@@ -262,6 +289,146 @@ export const assistChat = (conn: string,
   messages: { role: string; content: string }[], includeSchema: boolean): Promise<AssistReplyDto> =>
   fetch(`${base}/assist/chat`, json("POST", { connectionId: conn, messages, includeSchema }))
     .then(r => ok<AssistReplyDto>(r));
+
+export interface ObjectStatisticsDto {
+  supported: boolean;
+  table: { name: string; value: string | null; kind: string }[];
+  indexes: { name: string; sizeBytes: number | null; scans: number | null; unique: boolean; primary: boolean }[];
+}
+
+/// What the engine knows about one object beyond its shape. `supported: false` on an engine that
+/// keeps no statistics — an empty list would read as "nothing to report".
+export const objectStatistics = (conn: string, ref: string): Promise<ObjectStatisticsDto> =>
+  fetch(`${base}/schema/${conn}/statistics?${refQuery(ref, new URLSearchParams())}`)
+    .then(r => ok<ObjectStatisticsDto>(r));
+
+export interface ObjectPrivilegesDto {
+  supported: boolean;
+  grants: { grantee: string; privilege: string; grantable: boolean }[];
+  privileges: string[];
+}
+
+export const objectPrivileges = (conn: string, ref: string): Promise<ObjectPrivilegesDto> =>
+  fetch(`${base}/schema/${conn}/privileges?${refQuery(ref, new URLSearchParams())}`)
+    .then(r => ok<ObjectPrivilegesDto>(r));
+
+/// The GRANT or REVOKE as text. Nothing runs here: it goes through the script preview.
+export const privilegeStatement = (conn: string, ref: string, grantee: string, privilege: string,
+  revoke: boolean): Promise<{ sql: string }> =>
+  fetch(`${base}/schema/${conn}/privileges/statement?${refQuery(ref, new URLSearchParams())}`,
+    json("POST", { grantee, privilege, revoke })).then(r => ok<{ sql: string }>(r));
+
+export const objectDependencies = (conn: string, ref: string):
+  Promise<{ dependsOn: string[]; usedBy: string[]; bestEffort: boolean }> =>
+  fetch(`${base}/ddl/${conn}/dependencies?${refQuery(ref, new URLSearchParams())}`)
+    .then(r => ok<{ dependsOn: string[]; usedBy: string[]; bestEffort: boolean }>(r));
+
+export const objectDdl = (conn: string, ref: string):
+  Promise<{ create: string | null; supported: boolean }> =>
+  fetch(`${base}/ddl/${conn}?${refQuery(ref, new URLSearchParams())}`)
+    .then(r => ok<{ create: string | null; supported: boolean }>(r));
+
+export interface DistinctValuesDto {
+  /// True when the column is masked: the distinct values of a column of secrets are the secrets.
+  masked: boolean;
+  values: { value: unknown; count: number }[];
+  truncated: boolean;
+}
+
+export const distinctValues = (conn: string, ref: string, column: string, search?: string):
+  Promise<DistinctValuesDto> => {
+  const query = new URLSearchParams({ column });
+  if (search) query.set("search", search);
+  return fetch(`${base}/data/${conn}/distinct?${refQuery(ref, query)}`)
+    .then(r => ok<DistinctValuesDto>(r));
+};
+
+export interface RowSecurityDto {
+  supported: boolean;
+  enabled: boolean;
+  forced: boolean;
+  policies: {
+    name: string; command: string; roles: string; permissive: boolean;
+    using: string | null; check: string | null;
+  }[];
+}
+
+export const objectPolicies = (conn: string, ref: string): Promise<RowSecurityDto> =>
+  fetch(`${base}/schema/${conn}/policies?${refQuery(ref, new URLSearchParams())}`)
+    .then(r => ok<RowSecurityDto>(r));
+
+/// Every write here comes back as a statement: a policy is SQL, and reading it before it runs is
+/// the point of the whole tab.
+export const policyStatement = (conn: string, ref: string, body: {
+  name: string; command?: string; roles?: string; using?: string; check?: string; drop?: boolean;
+}): Promise<{ sql: string }> =>
+  fetch(`${base}/schema/${conn}/policies/statement?${refQuery(ref, new URLSearchParams())}`,
+    json("POST", body)).then(r => ok<{ sql: string }>(r));
+
+export const securityStatement = (conn: string, ref: string, enable: boolean, force: boolean):
+  Promise<{ sql: string }> =>
+  fetch(`${base}/schema/${conn}/policies/security-statement?${refQuery(ref, new URLSearchParams())}`,
+    json("POST", { enable, force })).then(r => ok<{ sql: string }>(r));
+
+export interface PartitioningDto {
+  supported: boolean;
+  partitioned: boolean;
+  strategy: string | null;
+  key: string | null;
+  partitions: { name: string; bound: string; sizeBytes: number | null; rows: number | null }[];
+}
+
+export const objectPartitions = (conn: string, ref: string): Promise<PartitioningDto> =>
+  fetch(`${base}/schema/${conn}/partitions?${refQuery(ref, new URLSearchParams())}`)
+    .then(r => ok<PartitioningDto>(r));
+
+export const partitionStatement = (conn: string, ref: string, body: {
+  partition: string; bound?: string; detach?: boolean; concurrently?: boolean;
+}): Promise<{ sql: string }> =>
+  fetch(`${base}/schema/${conn}/partitions/statement?${refQuery(ref, new URLSearchParams())}`,
+    json("POST", body)).then(r => ok<{ sql: string }>(r));
+
+/// Refreshing a materialised view. Concurrently keeps it readable and needs a unique index.
+export const refreshStatement = (conn: string, ref: string, concurrently: boolean):
+  Promise<{ sql: string }> =>
+  fetch(`${base}/schema/${conn}/refresh-statement?${refQuery(ref, new URLSearchParams())}`,
+    json("POST", { concurrently })).then(r => ok<{ sql: string }>(r));
+
+/// "SELECT on everything in this schema for that role" — one script rather than one dialog per
+/// table.
+export const bulkGrantStatement = (conn: string, body: {
+  schema: string; grantee: string; privileges: string[]; revoke?: boolean; includeFuture?: boolean;
+}): Promise<{ sql: string; tables: number }> =>
+  fetch(`${base}/schema/${conn}/privileges/bulk-statement`, json("POST", body))
+    .then(r => ok<{ sql: string; tables: number }>(r));
+
+export interface FunctionInfoDto {
+  supported: boolean;
+  language: string | null;
+  returns: string | null;
+  returnsSet: boolean;
+  arguments: { name: string; type: string; mode: string; hasDefault: boolean }[];
+  source: string | null;
+}
+
+export const functionInfo = (conn: string, ref: string): Promise<FunctionInfoDto> =>
+  fetch(`${base}/schema/${conn}/function?${refQuery(ref, new URLSearchParams())}`)
+    .then(r => ok<FunctionInfoDto>(r));
+
+export interface TrialRunDto {
+  columns: string[];
+  rows: unknown[][];
+  notices: string[];
+  elapsedMs: number;
+  truncated: boolean;
+}
+
+/// Runs the function inside a transaction the server always rolls back. Not a debugger: no
+/// stepping, no breakpoints — the source, the arguments, what came back and what it raised.
+export const functionTrialRun = (conn: string, ref: string, args: (string | null)[]):
+  Promise<TrialRunDto> =>
+  fetch(`${base}/schema/${conn}/function/run?${refQuery(ref, new URLSearchParams())}`,
+    json("POST", { arguments: args })).then(r => ok<TrialRunDto>(r));
 
 export interface SharedResultDto {
   id: string;
@@ -467,6 +634,57 @@ export const previewRename = (conn: string, ref: string, newName: string):
   fetch(`${base}/ddl/${conn}/rename`, json("POST", { objectRef: ref, newName }))
     .then(r => ok<{ hash: string; script: string; dependencies: DependencyReportDto }>(r));
 
+// --- archives ----------------------------------------------------------------
+export interface ArchiveInfoDto {
+  name: string;
+  columns: { name: string; dataType: string }[];
+  rows: number;
+  sizeBytes: number;
+  savedAt: string;
+  source: string | null;
+}
+
+export interface ArchiveListDto {
+  available: boolean;
+  path: string;
+  error: string | null;
+  items: ArchiveInfoDto[];
+}
+
+export const listArchives = (): Promise<ArchiveListDto> =>
+  fetch(`${base}/archives`).then(r => ok<ArchiveListDto>(r));
+
+export interface ArchivePageDto {
+  columns: { name: string; dataType: string }[];
+  rows: unknown[][];
+  total: number;
+  offset: number;
+}
+
+export const readArchive = (name: string, offset = 0, limit = 200): Promise<ArchivePageDto> =>
+  fetch(`${base}/archives/${encodeURIComponent(name)}?offset=${offset}&limit=${limit}`)
+    .then(r => ok<ArchivePageDto>(r));
+
+/// Keeps a statement's result, or a whole table, as a file on the studio's own disk. Masked
+/// columns are masked on the way in: an archive of them would be a way around the masking.
+export const saveArchive = (name: string, body: {
+  connectionId: string; sql?: string; objectRef?: string; maxRows?: number;
+}): Promise<ArchiveInfoDto> =>
+  fetch(`${base}/archives/${encodeURIComponent(name)}`, json("POST", body))
+    .then(r => ok<ArchiveInfoDto>(r));
+
+export const deleteArchive = (name: string): Promise<void> =>
+  fetch(`${base}/archives/${encodeURIComponent(name)}`, { method: "DELETE" }).then(r => ok<void>(r));
+
+/// The rows again as INSERT statements, for wherever they should end up next.
+export const archiveInsertScript = (name: string, connectionId: string, table: string, limit?: number):
+  Promise<{ sql: string; rows: number; truncated: boolean }> => {
+  const query = new URLSearchParams({ connectionId, table });
+  if (limit) query.set("limit", String(limit));
+  return fetch(`${base}/archives/${encodeURIComponent(name)}/insert-script?${query}`,
+    { method: "POST" }).then(r => ok<{ sql: string; rows: number; truncated: boolean }>(r));
+};
+
 // --- ER diagram --------------------------------------------------------------
 export interface DiagramColumnDto {
   name: string; type: string; nullable: boolean; primaryKey: boolean; foreignKey: boolean;
@@ -479,14 +697,16 @@ export interface DiagramEdgeDto {
   sourceColumns: string[]; targetColumns: string[]; resolved: boolean;
 }
 
+export interface DiagramDto { nodes: DiagramNodeDto[]; edges: DiagramEdgeDto[] }
+
 export const loadDiagram = (conn: string, schema?: string, refresh = false):
-  Promise<{ nodes: DiagramNodeDto[]; edges: DiagramEdgeDto[] }> => {
+  Promise<DiagramDto> => {
   const query = new URLSearchParams();
   if (schema) query.set("schema", schema);
   if (refresh) query.set("refresh", "true");
 
   return fetch(`${base}/diagram/${conn}${query.size ? `?${query}` : ""}`)
-    .then(r => ok<{ nodes: DiagramNodeDto[]; edges: DiagramEdgeDto[] }>(r));
+    .then(r => ok<DiagramDto>(r));
 };
 
 // --- administration ----------------------------------------------------------
@@ -543,13 +763,23 @@ export const serverLog = (conn: string, lines = 200): Promise<ServerLogDto> =>
   fetch(`${base}/admin/logs/${conn}?lines=${lines}`).then(r => ok<ServerLogDto>(r));
 
 /// The backup answers with the dump itself, so it is downloaded rather than parsed.
-export const downloadBackup = async (conn: string, body: {
+export interface BackupOptionsInput {
   schemaOnly?: boolean; dataOnly?: boolean; tables?: string[];
-}): Promise<void> => {
+  /// pg_dump only: plain, custom or tar. The server refuses it on the other engines rather than
+  /// producing a plain dump under a misleading name.
+  format?: string; noOwner?: boolean; clean?: boolean; compress?: number;
+}
+
+export const downloadBackup = async (conn: string, body: BackupOptionsInput,
+  onBytes?: (written: number) => void): Promise<void> => {
   const response = await fetch(`${base}/admin/backup/${conn}`, json("POST", body));
   if (!response.ok) await fail(response);
 
-  const blob = await response.blob();
+  // A dump has no length up front — the tool is still running. Counting what arrives is the only
+  // progress there is, and it is the one worth showing.
+  const blob = onBytes && response.body
+    ? await countingBlob(response.body, response.headers.get("content-type"), onBytes)
+    : await response.blob();
   const disposition = response.headers.get("content-disposition") ?? "";
   const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? "backup";
 
@@ -560,6 +790,23 @@ export const downloadBackup = async (conn: string, body: {
   link.click();
   URL.revokeObjectURL(url);
 };
+
+async function countingBlob(body: ReadableStream<Uint8Array>, contentType: string | null,
+  onBytes: (written: number) => void): Promise<Blob> {
+  const reader = body.getReader();
+  const chunks: BlobPart[] = [];
+  let written = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value as BlobPart);
+    written += value.byteLength;
+    onBytes(written);
+  }
+
+  return new Blob(chunks, { type: contentType ?? "application/octet-stream" });
+}
 
 export const restoreBackup = async (conn: string, file: File, confirm: string): Promise<string> => {
   const form = new FormData();

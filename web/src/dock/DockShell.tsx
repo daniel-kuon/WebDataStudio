@@ -2,8 +2,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent, DockviewGroupPanel, IDockviewPanelProps } from "dockview-react";
 import { ActionIcon, Group, Modal, Text, Tooltip } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import {
-  IconArrowsJoin, IconNotebook,
+  IconArchive, IconArrowsJoin, IconBinaryTree, IconNotebook,
   IconBookmarks, IconCommand, IconGitCompare, IconHistory, IconKey, IconLayoutBoard,
   IconSettingsCog, IconSitemap, IconSquarePlus, IconTable,
 } from "@tabler/icons-react";
@@ -11,6 +12,9 @@ import "dockview-react/dist/styles/dockview.css";
 import "../editor/dockview-mantine.css";
 import { useAppTheme } from "../ThemeProvider";
 import { FederationPanel } from "../federate/FederationPanel";
+import { PerspectivePanel } from "../perspective/PerspectivePanel";
+import { ArchivePanel } from "../archive/ArchivePanel";
+import { ArchiveDialog, type ArchiveTarget } from "../archive/KeepArchiveButton";
 import { NotebookPanel } from "../notebook/NotebookPanel";
 import { isAdmin, useRole } from "../auth/useRole";
 import { ExplorerTree, type ExplorerAction, type ExplorerSelection } from "../explorer/ExplorerTree";
@@ -29,6 +33,8 @@ import { parseModel } from "../designer/buildSelect";
 import { SavedQueriesPanel } from "../query/SavedQueriesPanel";
 import { SnippetManager } from "../editor/SnippetManager";
 import { CommandPalette, ShortcutsHelp } from "../shell/CommandPalette";
+import { PreferencesModal } from "../shell/PreferencesModal";
+import { comboOf, loadPreferences, preferences } from "../shell/preferences";
 import { StudioTab, TabPinsProvider, type TabPins } from "./StudioTab";
 import { VersionBadge } from "../shell/VersionBadge";
 import { LayoutPresetsModal, presetForSlot, useLayoutPresets } from "../shell/LayoutPresets";
@@ -37,13 +43,14 @@ import { buildDeepLink, parseDeepLink } from "../shell/deepLink";
 import { GoToObject } from "../shell/GoToObject";
 import { NewDatabaseDialog, DropDatabaseDialog, type DatabaseTarget } from "../explorer/DatabaseDialogs";
 import { PropertiesDialog } from "../explorer/PropertiesDialog";
+import { GrantDialog, type GrantTarget } from "../explorer/GrantDialog";
 import {
-  dropColumn, dropConstraint, dropIndex, executeRoutine, rebuildIndex, refreshMaterializedView,
+  dropColumn, dropConstraint, dropIndex, executeRoutine, rebuildIndex,
   selectColumn,
 } from "../sql/objectScripts";
 import {
-  applyDdl, describeObject, listConnections, loadTabs, loadWorkspaceItem, previewRename, saveTabs,
-  saveWorkspaceItem,
+  applyDdl, describeObject, listConnections, loadTabs, loadWorkspaceItem, previewRename,
+  refreshStatement, saveTabs, saveWorkspaceItem,
   type BrowseFilter, type Connection, type ForeignKeyDto, type ReferencingKeyDto,
 } from "../api";
 import { ExportDialog, type ExportTarget } from "../export/ExportDialog";
@@ -111,7 +118,15 @@ const DIALECTS: Record<string, DialectId> = {
 export const dialectFor = (engine: string): DialectId => DIALECTS[engine] ?? "postgresql";
 
 function StructurePanel() {
-  return <ObjectDetailPanel selection={useShell().selection} />;
+  const shell = useShell();
+
+  return (
+    <ObjectDetailPanel selection={shell.selection}
+      // The SQL tab and the privilege statements open a query tab rather than running anything:
+      // a GRANT goes through the editor's preview like every other change.
+      onOpenInEditor={sql => shell.selection
+        && shell.runStatement(shell.selection.connectionId, sql)} />
+  );
 }
 
 function QueryPanel(props: IDockviewPanelProps<{ tabId: string }>) {
@@ -233,6 +248,18 @@ function FederationDockPanel() {
   return <FederationPanel connections={shell.connections} />;
 }
 
+function PerspectiveDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) {
+  return <PerspectivePanel connectionId={props.params.connectionId} />;
+}
+
+function ArchiveDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) {
+  const shell = useShell();
+  return (
+    <ArchivePanel connectionId={props.params.connectionId}
+      onScript={sql => shell.runStatement(props.params.connectionId, sql)} />
+  );
+}
+
 function NotebookDockPanel(props: IDockviewPanelProps<{ connectionId?: string }>) {
   const shell = useShell();
   return <NotebookPanel connections={shell.connections} connectionId={props.params.connectionId} />;
@@ -307,6 +334,18 @@ function ExplorerDockPanel() {
             <IconNotebook size={15} />
           </ActionIcon>
         </Tooltip>
+        <Tooltip label="Archives: results kept as files">
+          <ActionIcon size="sm" variant="subtle" aria-label="Archives" disabled={!connection}
+            onClick={() => explorer.openTool("archive", "Archives", connection)}>
+            <IconArchive size={15} />
+          </ActionIcon>
+        </Tooltip>
+        <Tooltip label="Perspective: a row, and everything related to it">
+          <ActionIcon size="sm" variant="subtle" aria-label="Perspective" disabled={!connection}
+            onClick={() => explorer.openTool("perspective", "Perspective", connection)}>
+            <IconBinaryTree size={15} />
+          </ActionIcon>
+        </Tooltip>
         <Tooltip label="Join across connections">
           <ActionIcon size="sm" variant="subtle" aria-label="Federated query"
             disabled={!connection}
@@ -363,6 +402,7 @@ const components = {
   diagram: DiagramDockPanel, admin: AdminDockPanel, compare: CompareDockPanel,
   saved: SavedQueriesDockPanel, builder: QueryDesignerDockPanel, redis: RedisDockPanel,
   federate: FederationDockPanel, notebook: NotebookDockPanel,
+  perspective: PerspectiveDockPanel, archive: ArchiveDockPanel,
 };
 
 /// The default arrangement, in one place: the initial layout and the reset command must produce
@@ -448,11 +488,14 @@ export function DockShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const [prefsOpen, setPrefsOpen] = useState(false);
   const [layoutsOpen, setLayoutsOpen] = useState(false);
   const [explorerNonce, setExplorerNonce] = useState(0);
   const [gotoOpen, setGotoOpen] = useState(false);
   const [indexTarget, setIndexTarget] = useState<
     { connectionId: string; objectRef: string; schema: string; label: string; column?: string } | null>(null);
+  const [grantTarget, setGrantTarget] = useState<GrantTarget | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<ArchiveTarget | null>(null);
   const [newDatabase, setNewDatabase] = useState<DatabaseTarget | null>(null);
   const [dropDatabaseTarget, setDropDatabaseTarget] = useState<DatabaseTarget | null>(null);
   const [propertiesFor, setPropertiesFor] = useState<{ connectionId: string; label: string } | null>(null);
@@ -460,6 +503,9 @@ export function DockShell() {
   const { presets, save: savePresets } = useLayoutPresets();
 
   useEffect(() => { listConnections().then(setConnections).catch(() => setConnections([])); }, []);
+
+  // Preferences are read once; everything that reads them subscribes to the same copy.
+  useEffect(() => { void loadPreferences(); }, []);
 
   // Every way of reaching a panel goes through here, so the flash is not something half the
   // buttons remember to do.
@@ -867,7 +913,20 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
         break;
 
       case "script-refresh-matview":
-        newTab(s.connectionId, refreshMaterializedView(engine, name));
+      case "script-refresh-matview-live":
+        refreshStatement(s.connectionId, s.node.ref, action === "script-refresh-matview-live")
+          .then(built => newTab(s.connectionId, built.sql))
+          .catch(e => notifications.show({ color: "red", message: String(e.message ?? e) }));
+        break;
+
+      case "archive-table":
+        setArchiveTarget({
+          connectionId: s.connectionId, objectRef: s.node.ref, suggested: s.node.label,
+        });
+        break;
+
+      case "grant-schema":
+        setGrantTarget({ connectionId: s.connectionId, schema: s.node.label });
         break;
 
       case "new-database":
@@ -994,6 +1053,8 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
     openCompare: () => openTool("compare", "Compare", activeConnection),
     openNotebook: () => openTool("notebook", "Notebook", activeConnection),
     openFederation: () => openTool("federate", "Federated", activeConnection),
+    openPerspective: () => openTool("perspective", "Perspective", activeConnection),
+    openArchives: () => openTool("archive", "Archives", activeConnection),
     openHistory: () => focusPanel("history"),
     openSavedQueries: () => focusPanel("saved"),
     saveCurrentQuery: () => focusPanel("saved"),
@@ -1018,6 +1079,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
       void navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}${link}`);
     },
     showShortcuts: () => setShortcutsOpen(true),
+    openPreferences: () => setPrefsOpen(true),
   }), [activeConnection, focusPanel, newTab, openInBuilder, openTool, resetLayout, selection, showExplorer, tabs, exportQuery]);
 
   // Ctrl+K everywhere, "?" only outside a text field — otherwise it eats a question mark.
@@ -1025,6 +1087,18 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.closest("input, textarea, .monaco-editor") !== null;
+
+      const rebound = Object.entries(preferences().shortcuts)
+        .find(([, combo]) => combo === comboOf(event))?.[0];
+
+      if (rebound && !(typing && !event.ctrlKey && !event.metaKey && !event.altKey)) {
+        const command = commands.find(entry => entry.id === rebound);
+        if (command && !command.disabled) {
+          event.preventDefault();
+          command.run();
+          return;
+        }
+      }
 
       // Ctrl+L opens the preset list and arms the chord: the digit that follows picks a layout, 0
       // resets. A chord keeps Ctrl+1…9 free, which the browser owns for its tabs.
@@ -1056,6 +1130,11 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
         return;
       }
 
+      if ((event.ctrlKey || event.metaKey) && event.key === ",") {
+        event.preventDefault();
+        setPrefsOpen(true);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setPaletteOpen(true);
@@ -1079,7 +1158,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
 
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeConnection, applyLayout, presets, resetLayout, showExplorer]);
+  }, [activeConnection, applyLayout, commands, presets, resetLayout, showExplorer]);
 
   // The header button lives outside this component; the theme switch uses the same channel.
   useEffect(() => {
@@ -1160,6 +1239,9 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
       <PropertiesDialog connectionId={propertiesFor?.connectionId ?? null}
         label={propertiesFor?.label ?? ""} onClose={() => setPropertiesFor(null)} />
 
+      <GrantDialog target={grantTarget} onClose={() => setGrantTarget(null)} onScript={runStatement} />
+      <ArchiveDialog target={archiveTarget} onClose={() => setArchiveTarget(null)} />
+
       <NewDatabaseDialog target={newDatabase} onClose={() => setNewDatabase(null)}
         onDone={() => setExplorerNonce(n => n + 1)} />
       <DropDatabaseDialog target={dropDatabaseTarget} onClose={() => setDropDatabaseTarget(null)}
@@ -1170,6 +1252,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
       <CommandPalette commands={commands} opened={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ShortcutsHelp commands={commands} opened={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <SnippetManager opened={snippetsOpen} onClose={() => setSnippetsOpen(false)} />
+      <PreferencesModal commands={commands} opened={prefsOpen} onClose={() => setPrefsOpen(false)} />
       <LayoutPresetsModal opened={layoutsOpen} onClose={() => setLayoutsOpen(false)}
         connectionId={activeConnection || null}
         presets={presets} save={savePresets} slotsArmed={chordOpen}

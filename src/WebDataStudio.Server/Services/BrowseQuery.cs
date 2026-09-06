@@ -24,6 +24,10 @@ public sealed record BrowseQueryInput(
     IReadOnlyList<string> GroupBy,
     IReadOnlyList<BrowseAggregate> Aggregates);
 
+/// A borrowed column, resolved: "customer_id.name" is `Column` of the table `Key` points at, shown
+/// next to the id instead of being reached by following it.
+public sealed record ResolvedLookup(ForeignKeyInfo Key, string Name, ColumnInfo Column, SchemaNodeRef TargetRef);
+
 /// Builds the SELECT behind the data tab's query bar. Everything here is validated against the
 /// real schema before it goes anywhere near SQL: identifiers are resolved to columns that exist
 /// and quoted, values travel as parameters, and a join can only follow a foreign key the table
@@ -38,7 +42,10 @@ public static class BrowseQuery
     private static readonly string[] AggregateFunctions = ["count", "sum", "avg", "min", "max"];
 
     private static readonly string[] Operators =
-        ["contains", "startswith", "endswith", "eq", "neq", "gt", "gte", "lt", "lte", "null", "notnull"];
+        ["contains", "startswith", "endswith", "eq", "neq", "gt", "gte", "lt", "lte", "null", "notnull",
+         // The column box's small filter language (see FilterExpression); the value is the whole
+         // expression and the operator lives inside it.
+         "expr"];
 
     /// The label a join's columns carry: the referenced table's name, unless two selected keys
     /// reference the same table — then the key's own name, which is unique per table.
@@ -62,17 +69,20 @@ public static class BrowseQuery
 
     public static (string Sql, Dictionary<string, string?> Parameters) Build(
         string baseTable, ObjectDetail detail, IReadOnlyList<ResolvedJoin> joins,
-        BrowseQueryInput input, SqlDialect dialect, string charType)
+        IReadOnlyList<ResolvedLookup> lookups, BrowseQueryInput input, SqlDialect dialect,
+        string charType)
     {
-        // Every addressable column, resolved to its aliased SQL expression. Base columns keep
-        // their plain name; joined ones are "label.column" — result aliases and addresses match.
-        var expressions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Every addressable column, resolved to its aliased SQL expression and its declared type
+        // (the filter language compares a number column as a number). Base columns keep their
+        // plain name; joined and borrowed ones are "label.column" — result aliases and addresses
+        // match.
+        var expressions = new Dictionary<string, (string Sql, string DataType)>(StringComparer.OrdinalIgnoreCase);
         var select = new List<string>();
 
         foreach (var column in detail.Columns.OrderBy(c => c.Position))
         {
             var expression = $"t.{dialect.QuoteIdentifier(column.Name)}";
-            expressions[column.Name] = expression;
+            expressions[column.Name] = (expression, column.DataType);
             select.Add($"{expression} AS {dialect.QuoteIdentifier(column.Name)}");
         }
 
@@ -100,19 +110,40 @@ public static class BrowseQuery
             {
                 var name = $"{join.Label}.{column.Name}";
                 var expression = $"{alias}.{dialect.QuoteIdentifier(column.Name)}";
-                expressions[name] = expression;
+                expressions[name] = (expression, column.DataType);
                 select.Add($"{expression} AS {dialect.QuoteIdentifier(name)}");
             }
         }
 
+        // Borrowed columns join like a picked key does, but bring exactly one column each.
+        for (var i = 0; i < lookups.Count; i++)
+        {
+            var lookup = lookups[i];
+            var alias = $"l{i}";
+
+            from += $" LEFT JOIN {Qualify(lookup.TargetRef, dialect)} {alias}" +
+                    $" ON {alias}.{dialect.QuoteIdentifier(lookup.Key.ReferencedColumns[0])}" +
+                    $" = t.{dialect.QuoteIdentifier(lookup.Key.Columns[0])}";
+
+            var expression = $"{alias}.{dialect.QuoteIdentifier(lookup.Column.Name)}";
+            expressions[lookup.Name] = (expression, lookup.Column.DataType);
+            select.Add($"{expression} AS {dialect.QuoteIdentifier(lookup.Name)}");
+        }
+
         string Resolve(string column) =>
-            expressions.TryGetValue(column, out var expression)
-                ? expression
+            expressions.TryGetValue(column, out var entry)
+                ? entry.Sql
                 : throw new FormatException($"no column '{column}' on this table or its joins");
 
+        string TypeOf(string column) =>
+            expressions.TryGetValue(column, out var entry) ? entry.DataType : "";
+
         var parameters = new Dictionary<string, string?>();
-        var conditionsSql = input.Filters.Select(filter =>
-            Condition(filter, Resolve(filter.Column), dialect, charType, parameters)).ToList();
+        var conditionsSql = input.Filters
+            .Select(filter => Condition(filter, Resolve(filter.Column), TypeOf(filter.Column),
+                dialect, charType, parameters))
+            .Where(sql => sql.Length > 0)
+            .ToList();
         var where = conditionsSql.Count > 0 ? $" WHERE {string.Join(" AND ", conditionsSql)}" : "";
 
         var grouped = input.GroupBy.Count > 0 || input.Aggregates.Count > 0;
@@ -195,8 +226,8 @@ public static class BrowseQuery
     /// survived a strict invariant parse, because a range comparison on a CAST-to-text column would
     /// order "9" after "10". Text comparisons go through the same CAST the single-column filter
     /// always used, so they behave identically on every engine.
-    private static string Condition(BrowseFilter filter, string expression, SqlDialect dialect,
-        string charType, Dictionary<string, string?> parameters)
+    private static string Condition(BrowseFilter filter, string expression, string dataType,
+        SqlDialect dialect, string charType, Dictionary<string, string?> parameters)
     {
         var op = filter.Op.ToLowerInvariant();
         if (!Operators.Contains(op))
@@ -207,6 +238,21 @@ public static class BrowseQuery
 
         var value = filter.Value
             ?? throw new FormatException($"the {op} filter on '{filter.Column}' needs a value");
+
+        // The column box's language, routed through the same builder the plain browse uses, so
+        // `=a,=b` from the distinct list and `>10 <20` behave identically on both paths.
+        if (op == "expr")
+        {
+            var condition = FilterExpression.Build(dialect, expression,
+                FilterExpression.KindOf(dataType), value, $"f{parameters.Count}x");
+
+            if (condition.IsEmpty) return "";
+
+            foreach (var (key, parameterText) in FilterExpression.AsText(condition.Parameters))
+                parameters[key] = parameterText;
+
+            return $"({condition.Sql})";
+        }
 
         var text = $"CAST({expression} AS {charType})";
 

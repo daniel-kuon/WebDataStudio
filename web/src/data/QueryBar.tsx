@@ -66,7 +66,10 @@ export function QueryBar({ columns, foreignKeys, filters, sorts, joins, groupBy,
 
       {filters.map((filter, index) => (
         <Chip key={`f${index}`} color="blue"
-          label={`${filter.column} ${opLabel(filter.op)}${filter.value !== undefined && filter.value !== "" ? ` ${filter.value}` : ""}`}
+          // An "expr" filter is the column box's language; its value already reads as a condition.
+          label={filter.op === "expr"
+            ? `${filter.column}: ${filter.value ?? ""}`
+            : `${filter.column} ${opLabel(filter.op)}${filter.value !== undefined && filter.value !== "" ? ` ${filter.value}` : ""}`}
           onRemove={() => onChange({ filters: filters.filter((_, i) => i !== index) })} />
       ))}
       {sorts.map((sort, index) => (

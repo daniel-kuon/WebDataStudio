@@ -424,6 +424,9 @@ it works for every engine whose capability set claims support for it.
 | F23.1 | Browsing a table's data has the same column controls as a query result |
 | F23.2 | The explorer searches for objects, not for the level it happens to show |
 | F23.3 | Panels can be closed in groups, pinned, and moved into their own window |
+| F23.4 | A query bar over the data tab: several filters, multi-column ordering, joins along the foreign keys, grouping with aggregates |
+| F23.5 | Following a foreign key is configurable: a query tab, a filtered data tab, or a split next to its source |
+| F23.6 | Referencing rows per incoming foreign key, expanded inline under a row or opened like a followed key |
 | F19.1 | A Redis keyspace is browsed by scanning, never by listing it |
 | F19.2 | Every Redis type is edited in the shape it has |
 | F19.3 | A Redis write is shown as the commands it will run before it runs |
@@ -459,6 +462,28 @@ it works for every engine whose capability set claims support for it.
 | F24.5 | A report runs itself, and reads only |
 | F24.6 | "Here is what I am seeing" is a link, not a screenshot |
 | F24.7 | The studio is visible in the same collector as everything else |
+| F25.1 | An object says what it costs and which of its indexes anybody reads |
+| F25.2 | Who may do what to an object, and the statement that changes it |
+| F25.3 | What breaks if this object changes |
+| F25.4 | Any object can be read as the statement that creates it |
+| F25.5 | A plan that spilled to disk says so |
+| F26.1 | The tree shows the server's own objects: extensions, roles, tablespaces, publications, subscriptions, types |
+| F26.2 | Privileges for everything in a schema at once, including what is created later |
+| F26.3 | A materialised view can be refreshed, with or without blocking readers |
+| F26.4 | The dashboard draws its numbers over time, not only the last reading |
+| F26.5 | A backup says which format, which flags, and how many bytes have arrived |
+| F26.6 | A function can be read, run against a rolled-back transaction, and its notices seen |
+| F26.7 | Row-level security: whether it is on, what the policies say, and how to change them |
+| F26.8 | A partitioned table shows its pieces and can hand one over or take one back |
+| F26.9 | Preferences that survive a restart, including rebinding any command's shortcut |
+| F26.10 | A history entry can keep the result it returned, and show it again |
+| F27.1 | A column filter is a small language, not a substring: operators, dates, NULL, AND and OR |
+| F27.2 | The values a column actually holds, as checkboxes |
+| F27.3 | A column from the table a foreign key points at, shown next to the id |
+| F27.4 | A row and everything related to it, nested as deep as you open it |
+| F27.5 | A result kept as a file, listed, reopened, and scripted back as INSERTs |
+| F27.6 | Geography in a result drawn as a shape rather than read as coordinates |
+| F27.7 | "there is no row over there" as a condition in the query builder |
 
 ## 10. Safety behaviour
 
