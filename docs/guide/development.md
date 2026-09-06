@@ -23,6 +23,24 @@ cd web && npm install && npm run dev
 The published container serves the built SPA from the same origin, so there is no CORS
 configuration anywhere.
 
+## Running everything with Aspire
+
+The quickest way to a running studio with data in it is the sample app host:
+
+```bash
+dotnet run --project samples/WebDataStudio.AppHost
+```
+
+It starts three resources and opens the Aspire dashboard: **pg**, a PostgreSQL container with a
+named volume; **studio**, the server from this repository's source with `DEMO` (SQLite) and `PG`
+attached and `WDS_SEED_SQL` pointed at `web/scripts/demo-data` — the same seed the screenshots
+use, so what opens looks exactly like this documentation; and **web**, the Vite dev server with
+hot reload, proxying `/api` to the studio. Run `npm install` in `web/` once before the first
+start, and have Docker running for PostgreSQL.
+
+The studio's own data and the SQLite demo live in `samples/WebDataStudio.AppHost/.data`, which is
+ignored by git — delete it (and the `webdatastudio-demo-pg` volume) for a factory reset.
+
 ## The demo data, and the screenshots
 
 The browser checks and the screenshots run against two seeded connections. The studio seeds itself:

@@ -6,3 +6,4 @@ dist/
 .vs/
 /data/
 src/WebDataStudio.Server/wwwroot/
+samples/WebDataStudio.AppHost/.data/

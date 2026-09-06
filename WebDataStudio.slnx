@@ -2,6 +2,9 @@
   <Folder Name="/src/">
     <Project Path="src/WebDataStudio.Server/WebDataStudio.Server.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/WebDataStudio.AppHost/WebDataStudio.AppHost.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WebDataStudio.Server.Tests/WebDataStudio.Server.Tests.csproj" />
   </Folder>

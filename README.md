@@ -49,6 +49,19 @@ builder.AddSqlServer("sql").AddDatabase("orders").WithWebDataStudio();
 
 Both databases land in one studio; a second `studioName` gives you a second studio.
 
+### From this repository
+
+One command runs the whole thing from source — PostgreSQL in a container, the studio, and the SPA
+with hot reload, seeded with the demo data the documentation screenshots show:
+
+```bash
+dotnet run --project samples/WebDataStudio.AppHost
+```
+
+The Aspire dashboard opens with three resources: **studio** (the API, and the built SPA when there
+is one), **web** (Vite on the studio's API) and **pg**. `npm install` in `web/` once before the
+first start; Docker has to be running for PostgreSQL.
+
 ## Engines
 
 PostgreSQL · MySQL and MariaDB · Microsoft SQL Server · SQLite · Oracle · DuckDB · ClickHouse ·
