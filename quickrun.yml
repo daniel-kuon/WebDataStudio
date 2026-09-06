@@ -10,14 +10,42 @@ requires:
     version: ">=20.0"
     install: https://nodejs.org
 
+inputs:
+  # The switch between "something to click on" and a blank studio. The choice is the DEMO
+  # connection itself: with no file name the composed Data Source below points at a folder, which
+  # no engine claims, so the connection is skipped — and the seed only fills connections that
+  # exist. "Empty" therefore means no demo connection and nothing seeded, not a hidden default.
+  - id: demoData
+    label: Demo data
+    type: select
+    description: >-
+      Seeded starts with the dataset the documentation screenshots show — people, orders, items
+      and places on a SQLite connection called DEMO. Empty starts with no connection at all; add
+      your own on the connections page.
+    default: demo.db
+    options:
+      - { value: demo.db, label: seeded with the demo data }
+      - { value: "", label: empty — add connections yourself }
+    persist: true
+
 env:
   # Program.cs defaults to /data/webdatastudio.db, which is C:\data\... on Windows.
   DB_PATH: ${workspace}/wds.db
+  # Absolute on purpose: dotnet run gives the server the project directory as its working
+  # directory, so a relative path here would quietly point somewhere else.
+  WDS_CONN_DEMO: Data Source=${workspace}/data/${inputs.demoData}
+  # The studio seeds a fresh DEMO on first start (web/scripts/demo-data/DEMO.sql, once per script
+  # content). Inert while the demo connection is off: only a connection that exists is seeded.
+  WDS_SEED_SQL: ${workspace}/web/scripts/demo-data
 
 setup:
   - run: dotnet restore
   - run: npm ci
     cwd: web
+  # Where the demo database lives — /data/ is already ignored by git, and SQLite can only create
+  # a file in a folder that exists. "Already exists" is the good case, hence continueOnError.
+  - run: mkdir data
+    continueOnError: true
 
 tasks:
   - name: api
