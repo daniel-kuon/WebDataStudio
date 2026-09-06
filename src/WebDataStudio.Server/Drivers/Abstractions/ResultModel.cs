@@ -25,7 +25,11 @@ public sealed record ScriptRequest(
     IReadOnlyDictionary<string, string?>? Parameters = null,
     /// Runs the whole script inside one transaction: it commits when every statement
     /// succeeded and rolls back on the first failure. Off is the engines' own auto-commit.
-    bool Transactional = false);
+    bool Transactional = false,
+    /// Keep running the statements after one of them fails. Off — the default — stops at the first
+    /// error, which is what a migration wants; on is for the script of a hundred inserts where two
+    /// duplicates should not cost the other ninety-eight.
+    bool ContinueOnError = false);
 
 public enum PlanMode { Estimated, Actual }
 
@@ -40,6 +44,28 @@ public sealed record PlanNode(
     IReadOnlyList<string> Warnings);
 
 public enum AnalyzeScope { Connection, Schema, Table, Query }
+
+/// What a data tab is asking for: one page, in some order, possibly filtered on one column.
+///
+/// The filter is the studio's own small language — `^starts`, `>10`, `NULL`, a plain word for
+/// "contains" — and each driver honours as much of it as its engine can. What it cannot do it says
+/// rather than pretending.
+public sealed record PageQuery(
+    int Offset, int Limit, string? Sort, bool Desc, string? FilterColumn, string? Filter);
+
+/// One page of rows from an engine that built it itself.
+public sealed record TabularPage(
+    IReadOnlyList<ColumnMeta> Columns,
+    IReadOnlyList<object?[]> Rows,
+    /// How many there are in total, where the engine can say cheaply. Null is "unknown".
+    long? Total,
+    /// Whether this grid may write. False carries a reason the person reads instead of a disabled
+    /// button with no explanation.
+    bool Editable,
+    string? Reason,
+    /// What the driver could not do with the query it was given — an unsupported filter, a sort a
+    /// key space has no order for. Shown, not swallowed.
+    string? Note = null);
 
 public sealed record AnalyzeFinding(
     string Category, string Severity, string Title, string Detail, string? Statement);

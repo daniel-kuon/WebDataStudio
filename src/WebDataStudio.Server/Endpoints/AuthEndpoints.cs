@@ -16,8 +16,17 @@ public static class AuthEndpoints
 
         // A name for this studio, shown in the header and the browser tab. Empty by default, so
         // an unnamed studio looks exactly as it did before.
-        var title = app.Services.GetRequiredService<IConfiguration>()["WDS_TITLE"]?.Trim();
+        var configuration = app.Services.GetRequiredService<IConfiguration>();
+        var title = configuration["WDS_TITLE"]?.Trim();
         if (string.IsNullOrEmpty(title)) title = null;
+
+        // The theme a deployment wants the studio to come up in. The list of themes lives in the
+        // client, so the id travels unchecked and the client ignores one it does not know rather
+        // than this refusing to start over a colour scheme.
+        var theme = configuration["WDS_THEME"]?.Trim();
+        if (string.IsNullOrEmpty(theme)) theme = null;
+
+        var oidc = app.Services.GetRequiredService<OidcOptions>();
 
         api.MapGet("/auth/me", (HttpContext ctx, CurrentUser current) => Results.Ok(new
         {
@@ -28,7 +37,22 @@ public static class AuthEndpoints
             role = current.User?.Role,
             // The login screen needs it too, so it rides along with the one call that always runs.
             title,
+            // Where to start. A person's own choice is kept in their browser and wins over this.
+            theme,
+            // Whether there is a provider to offer, and what its button says. A studio with a
+            // provider and no local accounts shows only that button.
+            sso = new { enabled = oidc.Enabled, label = oidc.Label, only = oidc.Enabled && users.All.Count == 0 },
         })).AllowAnonymous();
+
+        // A top-level navigation rather than a fetch: the provider answers with its own page, and a
+        // redirect cannot be followed out of an XMLHttpRequest.
+        api.MapGet("/auth/sso", (HttpContext ctx, string? returnUrl) =>
+            oidc.Enabled
+                ? Results.Challenge(
+                    new AuthenticationProperties { RedirectUri = OidcOptions.SafeReturn(returnUrl) },
+                    [OidcOptions.Scheme])
+                : Results.NotFound(new { message = "no identity provider is configured" }))
+            .AllowAnonymous();
 
         api.MapPost("/auth/login", async (HttpContext ctx, LoginRequest body) =>
         {

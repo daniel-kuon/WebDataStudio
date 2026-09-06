@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { loadWorkspaceItem, saveWorkspaceItem } from "../api";
+import { deploymentPreferences, loadWorkspaceItem, saveWorkspaceItem } from "../api";
 
 export interface Preferences {
   /// Rows per page in the data tab.
@@ -11,6 +11,15 @@ export interface Preferences {
   snapshotRows: number;
   /// Command id to key combination, for the commands whose binding the user changed.
   shortcuts: Record<string, string>;
+  /// Whether the studio reads a statement before running it and says what it noticed — an UPDATE
+  /// with no WHERE, an accidental cross product. It only ever warns.
+  inspectBeforeRun: boolean;
+  /// Tell me when a query that took at least this many seconds is done, if I am looking at
+  /// something else. 0 switches it off.
+  notifyAfterSeconds: number;
+  /// Which clock timestamps are shown on: "local", "utc", or an IANA name like "Europe/Berlin".
+  /// Only what is shown — a value with no zone of its own is never converted.
+  timeZone: string;
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {
@@ -18,9 +27,29 @@ export const DEFAULT_PREFERENCES: Preferences = {
   historySnapshots: false,
   snapshotRows: 200,
   shortcuts: {},
+  inspectBeforeRun: true,
+  notifyAfterSeconds: 30,
+  timeZone: "local",
 };
 
 const KEY = "preferences";
+
+/// Layers one set of preferences over another, ignoring what it does not actually say.
+///
+/// A deployment that sets only the time zone sends `{"timeZone":"utc","pageSize":null,…}` — every
+/// other field is null, because the file it comes from is allowed to be partial. Spreading that
+/// over the defaults replaced `pageSize: 200` with `null`, and a data tab then asked for `limit=`,
+/// which is a 400 for every table in the studio. Absent has to mean absent.
+export function layer(base: Preferences, over: Partial<Preferences> | null | undefined): Preferences {
+  const merged = { ...base };
+
+  for (const [key, value] of Object.entries(over ?? {})) {
+    if (value === null || value === undefined) continue;
+    (merged as Record<string, unknown>)[key] = value;
+  }
+
+  return merged;
+}
 
 // One copy for the whole app, so a change reaches the data tab and the shortcut handler at once
 // without threading a context through everything in between.
@@ -32,17 +61,34 @@ const announce = () => listeners.forEach(listener => listener());
 /// Read once at start-up. A workspace without preferences, or one that cannot be read, leaves the
 /// defaults in place — this is nobody's reason to see an error.
 export async function loadPreferences(): Promise<void> {
+  // What the deployment says a studio should start with, under what this workspace has: a stack can
+  // set the time zone or the page size for everybody, and the first person to change one keeps
+  // their change.
+  let shipped: Partial<Preferences> = {};
+
+  try {
+    const answer = await deploymentPreferences();
+    if (answer.configured && answer.preferences) shipped = answer.preferences;
+  } catch { /* a studio without one is the normal case */ }
+
   try {
     const stored = await loadWorkspaceItem<Partial<Preferences>>(KEY);
-    if (stored) {
-      current = { ...DEFAULT_PREFERENCES, ...stored, shortcuts: stored.shortcuts ?? {} };
-      announce();
-    }
-  } catch { /* the defaults are a fine answer */ }
+
+    current = {
+      ...layer(layer(DEFAULT_PREFERENCES, shipped), stored),
+      shortcuts: stored?.shortcuts ?? {},
+    };
+
+    announce();
+  } catch {
+    // The workspace could not be read; the deployment's own answer is still better than nothing.
+    current = { ...layer(DEFAULT_PREFERENCES, shipped), shortcuts: {} };
+    announce();
+  }
 }
 
 export async function savePreferences(next: Partial<Preferences>): Promise<void> {
-  current = { ...current, ...next };
+  current = layer(current, next);
   announce();
   await saveWorkspaceItem(KEY, current);
 }

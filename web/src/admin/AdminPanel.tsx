@@ -5,16 +5,23 @@ import {
 } from "@mantine/core";
 import { IconPlayerStop, IconRefresh, IconTrash } from "@tabler/icons-react";
 import {
-  applyUserChange, createDatabase, downloadBackup, dropDatabase, killSession, listConnections,
+  createDatabase, downloadBackup, dropDatabase, killSession, listConnections,
   listDatabases,
-  listSessions, listUsers, previewUserChange, restoreBackup, runSystemCommand, serverLog,
+  listSessions, restoreBackup, runSystemCommand, serverLog,
   slowQueries, systemCommands, serverStats,
   type DatabaseDto, type SessionDto, type SystemCommandDto,
 } from "../api";
 import { Overview } from "./Overview";
 import { StudioUsers } from "./StudioUsers";
+import { Security } from "./Security";
+import { SchemaDrift } from "./SchemaDrift";
 import { SizeTreemap } from "./SizeTreemap";
 import { Replication } from "./Replication";
+import { Jobs } from "./Jobs";
+import { Capture } from "./Capture";
+import { Growth } from "./Growth";
+import { Quality } from "./Quality";
+import { Audit } from "./Audit";
 import { runJob } from "../shell/jobs";
 import { formatBytes } from "../redis/format";
 
@@ -233,61 +240,6 @@ function Databases({ connectionId }: { connectionId: string }) {
   );
 }
 
-function Users({ connectionId }: { connectionId: string }) {
-  const { data, error, busy, reload } = useAsync(() => listUsers(connectionId), [connectionId]);
-  const [user, setUser] = useState("");
-  const [password, setPassword] = useState("");
-  const [privilege, setPrivilege] = useState("");
-  const [target, setTarget] = useState("");
-  const [preview, setPreview] = useState<{ hash: string; script: string } | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-
-  if (busy) return <Loader size="xs" m="sm" />;
-  if (error) return <Alert color="yellow" variant="light" m="xs">{error}</Alert>;
-
-  return (
-    <Stack gap="xs" p="xs">
-      <Group gap={6} align="flex-end">
-        <TextInput size="xs" label="User" value={user} onChange={e => setUser(e.currentTarget.value)} />
-        <TextInput size="xs" label="Password" type="password" value={password}
-          onChange={e => setPassword(e.currentTarget.value)} />
-        <TextInput size="xs" label="Privilege" placeholder="SELECT" value={privilege}
-          onChange={e => setPrivilege(e.currentTarget.value)} />
-        <TextInput size="xs" label="On" placeholder="table" value={target}
-          onChange={e => setTarget(e.currentTarget.value)} />
-        <Button size="compact-xs" disabled={!user} onClick={() =>
-          previewUserChange(connectionId, { user, password, privilege, target })
-            .then(setPreview).catch(e => setFailure(e.message))}>Preview</Button>
-      </Group>
-
-      {failure ? <Alert color="red" variant="light">{failure}</Alert> : null}
-
-      <ScrollArea h={260}>
-        <Table striped fz="xs">
-          <Table.Tbody>
-            {data?.map(name => <Table.Tr key={name}><Table.Td>{name}</Table.Td></Table.Tr>)}
-          </Table.Tbody>
-        </Table>
-      </ScrollArea>
-
-      {/* The statement is shown before it runs — the same handshake the DDL designer uses. */}
-      <Modal opened={preview !== null} onClose={() => setPreview(null)} title="Review the statement">
-        <Stack gap="sm">
-          <Code block>{preview?.script}</Code>
-          <Group justify="flex-end">
-            <Button size="xs" variant="default" onClick={() => setPreview(null)}>Cancel</Button>
-            <Button size="xs" onClick={() => {
-              if (preview) applyUserChange(connectionId, preview.hash)
-                .catch(e => setFailure(e.message))
-                .finally(() => { setPreview(null); reload(); });
-            }}>Run</Button>
-          </Group>
-        </Stack>
-      </Modal>
-    </Stack>
-  );
-}
-
 function Backup({ connectionId, database }: { connectionId: string; database: string }) {
   const [schemaOnly, setSchemaOnly] = useState(false);
   const [dataOnly, setDataOnly] = useState(false);
@@ -476,38 +428,73 @@ function Logs({ connectionId }: { connectionId: string }) {
   );
 }
 
-export function AdminPanel({ connectionId, database = "" }: { connectionId: string; database?: string }) {
+export function AdminPanel({ connectionId, database = "", onOpenInEditor, tab }: {
+  connectionId: string;
+  database?: string;
+  /// Where a statement goes: the jobs tab hands its changes to a query tab rather than running them.
+  onOpenInEditor?: (sql: string) => void;
+  /// Which tab to open on. A command that says "scheduled jobs" should not land on the overview.
+  tab?: string;
+}) {
+  // Controlled from the outside only while it is asked for: after that the tabs are the person's
+  // own, and re-opening the same panel with another command moves them again.
+  const [active, setActive] = useState<string | null>(tab ?? "overview");
+
+  useEffect(() => { if (tab) setActive(tab); }, [tab]);
+
   if (!connectionId) return <Text size="xs" c="dimmed" p="xs">Select a connection first.</Text>;
 
   return (
-    <Tabs defaultValue="overview" keepMounted={false}>
+    <Tabs value={active} onChange={setActive} keepMounted={false}>
       <Tabs.List>
         <Tabs.Tab value="overview">Overview</Tabs.Tab>
         <Tabs.Tab value="maintenance">Maintenance</Tabs.Tab>
         <Tabs.Tab value="sessions">Sessions</Tabs.Tab>
+        <Tabs.Tab value="jobs">Jobs</Tabs.Tab>
+        <Tabs.Tab value="capture">Capture</Tabs.Tab>
+        <Tabs.Tab value="quality">Data quality</Tabs.Tab>
         <Tabs.Tab value="databases">Databases</Tabs.Tab>
-        <Tabs.Tab value="users">Users</Tabs.Tab>
+        <Tabs.Tab value="users">Accounts</Tabs.Tab>
         <Tabs.Tab value="studio-users">Studio users</Tabs.Tab>
+        <Tabs.Tab value="audit">Audit</Tabs.Tab>
         <Tabs.Tab value="backup">Backup</Tabs.Tab>
         <Tabs.Tab value="metrics">Metrics</Tabs.Tab>
         <Tabs.Tab value="slow">Slow queries</Tabs.Tab>
+        <Tabs.Tab value="schema">Schema drift</Tabs.Tab>
         <Tabs.Tab value="replication">Replication</Tabs.Tab>
         <Tabs.Tab value="logs">Log</Tabs.Tab>
       </Tabs.List>
 
       <Tabs.Panel value="maintenance"><Maintenance connectionId={connectionId} /></Tabs.Panel>
       <Tabs.Panel value="sessions"><Sessions connectionId={connectionId} /></Tabs.Panel>
+      <Tabs.Panel value="capture">
+        <Capture connectionId={connectionId} onOpenInEditor={onOpenInEditor} />
+      </Tabs.Panel>
+      <Tabs.Panel value="quality">
+        <Quality key={connectionId} connectionId={connectionId} onOpenInEditor={onOpenInEditor} />
+      </Tabs.Panel>
+      <Tabs.Panel value="jobs">
+        <Jobs connectionId={connectionId} onOpenInEditor={onOpenInEditor} />
+      </Tabs.Panel>
       <Tabs.Panel value="databases">
-        {/* The list to act on, and above it where the disk actually went. */}
+        {/* The list to act on, above it where the disk actually went, and below it which table is
+            taking more of it than last week. */}
         <ScrollArea h="100%" p="xs">
           <SizeTreemap connectionId={connectionId} />
           <div style={{ marginTop: 12 }}>
             <Databases connectionId={connectionId} />
           </div>
+          <div style={{ marginTop: 12 }}>
+            <Growth connectionId={connectionId} />
+          </div>
         </ScrollArea>
       </Tabs.Panel>
-      <Tabs.Panel value="users"><Users connectionId={connectionId} /></Tabs.Panel>
+      <Tabs.Panel value="users"><Security connectionId={connectionId} /></Tabs.Panel>
+      <Tabs.Panel value="schema">
+        <SchemaDrift connectionId={connectionId} onOpenInEditor={onOpenInEditor} />
+      </Tabs.Panel>
       <Tabs.Panel value="studio-users"><StudioUsers /></Tabs.Panel>
+      <Tabs.Panel value="audit"><Audit connectionId={connectionId} /></Tabs.Panel>
       <Tabs.Panel value="backup"><Backup connectionId={connectionId} database={database} /></Tabs.Panel>
       <Tabs.Panel value="overview"><Overview connectionId={connectionId} /></Tabs.Panel>
       <Tabs.Panel value="metrics"><ServerMetrics connectionId={connectionId} /></Tabs.Panel>

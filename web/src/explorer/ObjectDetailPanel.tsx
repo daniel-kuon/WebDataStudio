@@ -7,6 +7,12 @@ import {
 } from "./ObjectTabs";
 import { PartitionsTab, PoliciesTab } from "./ObjectAdminTabs";
 import { FunctionTab } from "./FunctionTab";
+import { StoragePreview } from "../storage/StoragePreview";
+import { ProfileTab } from "./ProfileTab";
+import { NotesTab } from "./NotesTab";
+
+/// The kinds that hold rows, and so have something to count.
+const OBJECT_KINDS = ["Table", "View", "MaterializedView"];
 
 const DESCRIBABLE = ["Table", "View", "MaterializedView"];
 
@@ -14,11 +20,14 @@ const DESCRIBABLE = ["Table", "View", "MaterializedView"];
 /// and a run, so the panel opens on those rather than saying nothing.
 const ROUTINES = ["Function", "Procedure"];
 
-export function ObjectDetailPanel({ selection, onOpenInEditor }: {
+export function ObjectDetailPanel({ selection, onOpenInEditor, onOpenData }: {
   selection: ExplorerSelection | null;
   /// Opens SQL in a query tab — used by the SQL tab and by the privilege statements, which go
   /// through the editor's own preview rather than running from here.
   onOpenInEditor?: (sql: string) => void;
+  /// Opens the object's rows in a data tab. A file in a bucket offers this where a reader
+  /// understands it.
+  onOpenData?: (selection: ExplorerSelection) => void;
 }) {
   const [detail, setDetail] = useState<ObjectDetailDto | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +46,14 @@ export function ObjectDetailPanel({ selection, onOpenInEditor }: {
 
   if (!selection) return <Text size="xs" c="dimmed" p="xs">Select an object.</Text>;
 
+  // An object in a bucket has no indexes, keys or privileges. What it has is its own facts, the
+  // front of its content and, where a reader understands it, the columns of the table it would be.
+  if (selection.node.kind === "StorageObject")
+    return (
+      <StoragePreview connectionId={selection.connectionId} objectRef={selection.node.ref}
+                      onOpenData={onOpenData && (() => onOpenData(selection))} />
+    );
+
   const routine = ROUTINES.includes(selection.node.kind);
 
   if (!DESCRIBABLE.includes(selection.node.kind) && !routine)
@@ -51,6 +68,9 @@ export function ObjectDetailPanel({ selection, onOpenInEditor }: {
         {detail && <Tabs.Tab value="indexes">Indexes</Tabs.Tab>}
         {detail && <Tabs.Tab value="keys">Keys</Tabs.Tab>}
         {detail && <Tabs.Tab value="statistics">Statistics</Tabs.Tab>}
+        {detail && OBJECT_KINDS.includes(selection.node.kind)
+          && <Tabs.Tab value="profile">Profile</Tabs.Tab>}
+        <Tabs.Tab value="notes">Notes</Tabs.Tab>
         {/* Only where they mean something: a view has no partitions, and only PostgreSQL has
             row-level security — the tabs themselves say so if opened anyway. */}
         {selection.node.kind === "Table" && <Tabs.Tab value="policies">Policies</Tabs.Tab>}
@@ -66,6 +86,19 @@ export function ObjectDetailPanel({ selection, onOpenInEditor }: {
       {/* The four tabs pgAdmin taught people to look for. Each asks the server for itself, so
           opening an object stays one request. */}
       {detail && <>
+      <Tabs.Panel value="notes" keepMounted={false}>
+        {/* Every kind of object, not only the ones with rows: a function is exactly the thing
+            somebody needs a sentence about. */}
+        <NotesTab connectionId={selection.connectionId} objectRef={selection.node.ref} />
+      </Tabs.Panel>
+
+      <Tabs.Panel value="profile" keepMounted={false}>
+        {/* Counted on demand: one statement per look, and a sample of the rows for the patterns. */}
+        <ProfileTab connectionId={selection.connectionId} objectRef={selection.node.ref}
+          table={selection.node.label}
+          schema={selection.node.ref.split(":")[1]?.split("/").slice(0, -1).join("/") ?? ""} />
+      </Tabs.Panel>
+
       <Tabs.Panel value="statistics" keepMounted={false}>
         <StatisticsTab connectionId={selection.connectionId} objectRef={selection.node.ref} />
       </Tabs.Panel>

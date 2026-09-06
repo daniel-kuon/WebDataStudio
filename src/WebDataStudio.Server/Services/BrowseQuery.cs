@@ -70,7 +70,7 @@ public static class BrowseQuery
     public static (string Sql, Dictionary<string, string?> Parameters) Build(
         string baseTable, ObjectDetail detail, IReadOnlyList<ResolvedJoin> joins,
         IReadOnlyList<ResolvedLookup> lookups, BrowseQueryInput input, SqlDialect dialect,
-        string charType)
+        string charType, string? rowAddress = null)
     {
         // Every addressable column, resolved to its aliased SQL expression and its declared type
         // (the filter language compares a number column as a number). Base columns keep their
@@ -78,6 +78,11 @@ public static class BrowseQuery
         // match.
         var expressions = new Dictionary<string, (string Sql, string DataType)>(StringComparer.OrdinalIgnoreCase);
         var select = new List<string>();
+
+        // A table with no key is addressed by where its rows physically are, and that only works
+        // if the address comes back with them — the same wds_row_address the plain browse selects.
+        if (rowAddress is { Length: > 0 })
+            select.Add($"t.{rowAddress} AS {dialect.QuoteIdentifier(Editing.RowIdentity.AddressColumn)}");
 
         foreach (var column in detail.Columns.OrderBy(c => c.Position))
         {

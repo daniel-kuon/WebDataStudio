@@ -1,7 +1,10 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using WebDataStudio.Server.Admin;
 using WebDataStudio.Server.Drivers;
+using WebDataStudio.Server.Drivers.Storage;
 using WebDataStudio.Server.Endpoints;
 using WebDataStudio.Server.Export;
 using OpenTelemetry.Metrics;
@@ -9,6 +12,20 @@ using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using WebDataStudio.Server.Mcp;
 using WebDataStudio.Server.Services;
+
+// The image build stages DuckDB's storage extensions with this, so that a studio in a private
+// network never has to download one. It installs and exits; it does not start a server.
+if (args.Contains("--install-storage-extensions"))
+{
+    var directory = Environment.GetEnvironmentVariable(DuckDbExtensions.DirectoryVariable)
+                    is { Length: > 0 } given
+        ? given
+        : "/opt/duckdb/extensions";
+
+    Console.WriteLine($"staging DuckDB storage extensions in {directory}");
+    Console.WriteLine("loaded: " + await DuckDbExtensions.StageAsync(directory));
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
@@ -25,7 +42,9 @@ builder.Services.AddSingleton(sp => UserStore.FromConfiguration(sp.GetRequiredSe
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<CurrentUser>();
 
-builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+builder.Services.AddSingleton(sp => OidcOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+
+var authentication = builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(o =>
     {
         o.Cookie.Name = "wds.auth";
@@ -37,6 +56,63 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         // An API returns 401/403; it must not redirect a fetch() to a login page.
         o.Events.OnRedirectToLogin = ctx => { ctx.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; };
         o.Events.OnRedirectToAccessDenied = ctx => { ctx.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; };
+    });
+
+// The company's own identity provider, where there is one. The studio keeps its cookie either way:
+// what arrives from the provider is turned into the same three claims a password sign-in writes, so
+// everything downstream — roles, which connections an account sees, the audit trail — is unchanged.
+//
+// The handler is always registered and configured from the container, because the values are only
+// final once the host has composed its configuration; /api/auth/sso is what refuses when no
+// provider was configured, so a registered handler nobody can reach costs nothing.
+// Only when one is configured *and usable*: the authentication middleware instantiates every
+// registered handler on every request, so a handler that refuses to be built takes the whole studio
+// with it — see OidcOptions.Refuse for what is checked before it gets that far.
+if (OidcOptions.FromConfiguration(builder.Configuration).Enabled)
+    authentication.AddOpenIdConnect(OidcOptions.Scheme, o =>
+    {
+        o.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        // The authorization code flow with PKCE: the only one worth offering a browser in 2026.
+        o.ResponseType = "code";
+        o.UsePkce = true;
+        o.SaveTokens = false;
+        o.GetClaimsFromUserInfoEndpoint = true;
+        o.MapInboundClaims = false;
+
+        o.Events.OnTicketReceived = ctx =>
+        {
+            var options = ctx.HttpContext.RequestServices.GetRequiredService<OidcOptions>();
+            var user = options.UserFor(ctx.Principal ?? new ClaimsPrincipal());
+
+            // Only the studio's own claims are kept: the id token's audience, expiry and the rest
+            // belong to the provider, and a cookie that carries them is a cookie that leaks them.
+            ctx.Principal = new ClaimsPrincipal(new ClaimsIdentity(
+                CurrentUser.ClaimsOf(user), CookieAuthenticationDefaults.AuthenticationScheme));
+
+            return Task.CompletedTask;
+        };
+
+        // A sign-in that goes wrong is a login screen with a message on it, not a stack trace.
+        o.Events.OnRemoteFailure = ctx =>
+        {
+            ctx.Response.Redirect("/?sso=failed");
+            ctx.HandleResponse();
+            return Task.CompletedTask;
+        };
+    });
+
+builder.Services.AddOptions<Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectOptions>(
+        OidcOptions.Scheme)
+    .Configure<OidcOptions>((o, oidc) =>
+    {
+        o.Authority = oidc.Authority;
+        o.ClientId = oidc.ClientId;
+        o.ClientSecret = oidc.ClientSecret;
+        o.RequireHttpsMetadata = oidc.RequireHttpsMetadata;
+        o.CallbackPath = oidc.CallbackPath;
+
+        o.Scope.Clear();
+        foreach (var scope in oidc.Scopes) o.Scope.Add(scope);
     });
 
 builder.Services.AddAuthorization();
@@ -82,9 +158,23 @@ builder.Services.AddHostedService<SavedQueryImportStartup>();
 builder.Services.AddSingleton(sp => SeedOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton<SeedScripts>();
 builder.Services.AddHostedService<SeedScriptStartup>();
+
+// The other kind of seed: not SQL somebody wrote, but tables that already exist somewhere else.
+builder.Services.AddSingleton(sp => SeedFromOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<SeedFromConnection>();
+builder.Services.AddSingleton(sp =>
+    FileViewerOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddHostedService<SeedFromStartup>();
 builder.Services.AddSingleton(sp => ScheduleOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton<ScheduledQueries>();
 builder.Services.AddHostedService<ScheduledQueryRunner>();
+
+// The same idea for dumps: off without a schedule file, so a studio never shells out to pg_dump
+// on its own unless a deployment asked it to.
+builder.Services.AddSingleton(sp =>
+    BackupScheduleOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<BackupSchedule>();
+builder.Services.AddHostedService<BackupScheduleRunner>();
 builder.Services.AddSingleton(sp => ShareOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton<ResultShares>();
 
@@ -122,9 +212,36 @@ builder.Services.AddHttpClient("assist", client => client.Timeout = TimeSpan.Fro
 builder.Services.AddSingleton<DriverRegistry>();
 builder.Services.AddSingleton<TunnelManager>();
 builder.Services.AddSingleton(sp => new SessionPool(sp.GetRequiredService<IConfiguration>()));
+// Transactions a query tab holds open across requests. Singleton, because the session they
+// hold has to survive the request that opened it.
+builder.Services.AddSingleton(sp => new OpenTransactions(
+    sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<ILogger<OpenTransactions>>()));
+// An interactive Entra sign-in is per studio, not per request: the token it ends up with is what
+// the next connection uses.
+builder.Services.AddSingleton<SchemaScope>();
+builder.Services.AddSingleton<EntraSignIn>();
 builder.Services.AddSingleton<SessionFactory>();
+builder.Services.AddSingleton(sp => AuditOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<AuditTrail>();
+builder.Services.AddSingleton(sp => SafetyOptions.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<SubsetBuilder>();
+builder.Services.AddSingleton<StatementCapture>();
+// Rules about the data rather than about the schema: each one counts the rows that break it.
+builder.Services.AddSingleton(sp => WebDataStudio.Server.Analysis.QualityFileOptions
+    .FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<WebDataStudio.Server.Analysis.QualityRunner>();
+// A file becomes a table: DuckDB reads it, the target engine's DDL writer creates it.
+builder.Services.AddSingleton<WebDataStudio.Server.Import.ImportService>();
+builder.Services.AddSingleton<WebDataStudio.Server.Import.FileTableImport>();
 builder.Services.AddSingleton<QueryRunner>();
-builder.Services.AddSingleton<ExporterRegistry>();
+// Export formats somebody wrote themselves: a folder the deployment mounts, plus whatever was
+// saved in this studio. They are text with placeholders, never code to run.
+builder.Services.AddSingleton(sp => new ExportTemplates(
+    sp.GetRequiredService<IConfiguration>(),
+    () => sp.GetRequiredService<WorkspaceStore>().LoadItem("export-templates"),
+    json => sp.GetRequiredService<WorkspaceStore>().SaveItem("export-templates", json)));
+
+builder.Services.AddSingleton(sp => new ExporterRegistry(sp.GetRequiredService<ExportTemplates>()));
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton(sp => new WorkspaceStore(
     sp.GetRequiredService<IConfiguration>()["DB_PATH"] ?? "/data/webdatastudio.db"));
@@ -150,12 +267,17 @@ app.MapOpenApi();
 var version = typeof(Program).Assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0";
-var built = File.GetLastWriteTimeUtc(typeof(Program).Assembly.Location);
+var built = BuildStamp.Of(typeof(Program).Assembly);
 
 // Touch both stores now rather than on the first request that needs one. They are singletons, so
 // a /data that never answers would otherwise turn one unlucky request into a hang and every
 // following one into a queue behind it — which is exactly how an Azure Files mount fails.
 var startupLog = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("WebDataStudio");
+
+// A provider that was configured but cannot be used: the studio runs, the login screen does not
+// offer it, and this is the only place that says why.
+if (app.Services.GetRequiredService<OidcOptions>().Problem is { } oidcProblem)
+    startupLog.LogWarning("the identity provider is not being offered: {Problem}", oidcProblem);
 var connectionStore = app.Services.GetRequiredService<ConnectionStore>();
 var workspaceStore = app.Services.GetRequiredService<WorkspaceStore>();
 
@@ -171,7 +293,7 @@ foreach (var (label, path, error) in new[]
 
 app.MapGet("/api/health", (ConnectionRegistry registry, AssistantOptions assistantOptions,
     McpAvailability mcpAvailability, AlertOptions alertOptions,
-    ShareOptions shareOptions, TelemetryOptions telemetry) => Results.Ok(new
+    ShareOptions shareOptions, TelemetryOptions telemetry, FileViewerOptions fileViewer) => Results.Ok(new
 {
     status = connectionStore.Available && workspaceStore.Available ? "ok" : "degraded",
     version,
@@ -202,6 +324,9 @@ app.MapGet("/api/health", (ConnectionRegistry registry, AssistantOptions assista
     // The MCP endpoint, so a client can find it without being told where to look — and so a
     // studio that refuses to serve it says why instead of advertising a path that answers HTML.
     mcp = mcpAvailability.Describe(),
+    // Where the rich file viewer is fetched from when somebody asks to look at a file in a bucket,
+    // or null for a studio that was told to do without one.
+    fileViewer = fileViewer.Enabled ? new { script = fileViewer.ScriptUrl } : null,
 })).AllowAnonymous();
 
 // A stuck data directory is a dependency failure, not a bug in the request: say so, with the path
@@ -212,10 +337,35 @@ app.Use(async (ctx, next) =>
     {
         await next();
     }
+    // Starting a sign-in can fail before the browser ever reaches the provider: a redirect URI the
+    // provider does not know, a pushed-authorization request it refuses. That is a login screen with
+    // a message on it, not a 500 with an empty body.
+    catch (Exception e) when (ctx.Request.Path.StartsWithSegments("/api/auth/sso")
+                             && !ctx.Response.HasStarted)
+    {
+        startupLog.LogError(e, "the sign-in could not be started");
+        ctx.Response.Redirect("/?sso=failed");
+    }
     catch (WorkspaceUnavailableException e)
     {
         startupLog.LogError(e, "a request needed the workspace database");
         ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsJsonAsync(new { message = e.Message });
+    }
+    // Every session a connection allows is in use. Said here rather than in each of twenty
+    // endpoints, and said at all: a request that waits forever looks like a studio that has frozen,
+    // and a browser gives one host six connections — a handful of these takes the window with them.
+    catch (SessionsBusyException e) when (!ctx.Response.HasStarted)
+    {
+        startupLog.LogWarning("{Path}: {Message}", ctx.Request.Path, e.Message);
+        ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        await ctx.Response.WriteAsJsonAsync(new { message = e.Message });
+    }
+    // Something this studio reads from stopped answering. Not its fault, and not a bad request.
+    catch (WebDataStudio.Server.Storage.StorageUnreachableException e) when (!ctx.Response.HasStarted)
+    {
+        startupLog.LogWarning("{Path}: {Message}", ctx.Request.Path, e.Message);
+        ctx.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
         await ctx.Response.WriteAsJsonAsync(new { message = e.Message });
     }
 });
@@ -225,6 +375,10 @@ app.UseStaticFiles();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Before the guard rather than after it: a refused request is a line worth having, and by here it is
+// already known who was refused.
+app.UseAuditTrail();
 
 // The whole API needs a signed-in user when credentials are configured. Health and the auth
 // endpoints stay open so the SPA can load and log in; without credentials nothing is guarded.
@@ -270,13 +424,22 @@ app.MapExportEndpoints();
 app.MapArchiveEndpoints();
 app.MapImportEndpoints();
 app.MapDataEndpoints();
+app.MapQualityEndpoints();
+app.MapIndexTrialEndpoints();
+app.MapStorageEndpoints();
 app.MapAnalysisEndpoints();
 app.MapDdlEndpoints();
 app.MapCompareEndpoints();
 app.MapAdminEndpoints();
 app.MapRedisEndpoints();
+app.MapNotifyEndpoints();
+app.MapDictionaryEndpoints();
+app.MapViewerEndpoints();
 app.MapDiagramEndpoints();
 app.MapSavedQueryEndpoints();
+app.MapDashboardEndpoints();
+app.MapDeploymentEndpoints();
+app.MapReportEndpoints();
 app.MapFederationEndpoints();
 app.MapAssistantEndpoints();
 app.MapShareEndpoints();
@@ -285,27 +448,59 @@ app.MapMcpEndpoints();
 app.MapMethods("/api/{**rest}", new[] { "GET", "HEAD", "POST", "PUT", "DELETE", "PATCH" }, () => Results.NotFound());
 app.MapFallbackToFile("index.html").AllowAnonymous();
 
-// Desktop mode: the same server, started from a downloaded binary rather than a container, opens
-// the browser once it is listening. In a container there is no browser to open.
-if ((desktop || string.Equals(Environment.GetEnvironmentVariable("WDS_OPEN_BROWSER"), "true",
+// Desktop mode: the same server, started from a downloaded binary rather than a container. It shows
+// itself once it is listening. In a container there is nothing to show it in.
+var shows = (desktop || string.Equals(Environment.GetEnvironmentVariable("WDS_OPEN_BROWSER"), "true",
         StringComparison.OrdinalIgnoreCase))
     && !string.Equals(Environment.GetEnvironmentVariable("WDS_OPEN_BROWSER"), "false",
-        StringComparison.OrdinalIgnoreCase))
+        StringComparison.OrdinalIgnoreCase);
+
+// A bundled native window was tried here — Photino, over WebView2 on Windows — and taken back out:
+// it opened a window that rendered nothing, on a headless session and on a real desktop alike, and a
+// dependency that ships native libraries for six platforms has to earn its place by working. What
+// does work is asking a browser that is already installed for a window without an address bar.
+if (shows)
 {
     app.Lifetime.ApplicationStarted.Register(() =>
     {
         var url = app.Urls.FirstOrDefault() ?? "http://localhost:8080";
-        try
-        {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch (Exception e)
-        {
-            app.Logger.LogInformation("open {Url} in your browser ({Reason})", url, e.Message);
-        }
+
+        // An installed Chromium is asked for a window without an address bar, which is what makes a
+        // download look like an application; a plain tab is the fallback. WDS_APP_WINDOW=false asks
+        // for the tab on purpose.
+        var wantsWindow = !string.Equals(app.Configuration["WDS_APP_WINDOW"], "false",
+            StringComparison.OrdinalIgnoreCase);
+
+        app.Logger.LogInformation("{What}", wantsWindow
+            ? AppWindow.Open(url, ProfilePath(app), app.Logger)
+            : OpenTab(url, app.Logger));
     });
 }
 
 app.Run();
+
+// Where the browser-in-app-mode window keeps its profile: beside the studio's own data, because it
+// belongs to this studio rather than to the browser it borrowed.
+static string ProfilePath(WebApplication app) => Path.Combine(
+    Path.GetDirectoryName(Path.GetFullPath(app.Configuration["DB_PATH"]
+        ?? (AppContext.TryGetSwitch("Wds.Desktop", out var isDesktop) && isDesktop
+            ? Path.Combine(AppContext.BaseDirectory, "data", "webdatastudio.db")
+            : "/data/webdatastudio.db")))!,
+    "app-window");
+
+// The plain-tab path, for WDS_APP_WINDOW=false.
+static string OpenTab(string url, ILogger logger)
+{
+    try
+    {
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        return $"opened {url} in your browser";
+    }
+    catch (Exception e)
+    {
+        logger.LogDebug("{Reason}", e.Message);
+        return $"open {url} in your browser";
+    }
+}
 
 public partial class Program { } // exposed for WebApplicationFactory

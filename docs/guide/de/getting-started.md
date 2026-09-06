@@ -58,12 +58,45 @@ builder.AddRedis("cache").WithWebDataStudio();
 Alle drei landen in einem Studio. `studioName:` ergibt ein zweites, und wer es selbst mit
 `AddWebDataStudio` baut, setzt Login, Nur-Lese-Modus und Zeilenlimits gleich im App-Host.
 
+Eine leere Entwicklungsdatenbank ist ein Studio ohne Inhalt, deshalb gibt es aus derselben Familie
+[Nextended.Aspire.Hosting.DbTools](https://www.nuget.org/packages/Nextended.Aspire.Hosting.DbTools/):
+Es füllt eine Datenbank aus einer bestehenden — Schema und Zeilen, aus einer anderen Ressource des
+Stacks oder von einem Server, zu dem der App-Host nur eine Verbindungszeichenfolge hat:
+
+```csharp
+builder.AddPostgres("pg").AddDatabase("shop")
+       .WithCloneFrom("Host=staging.internal;Database=shop;Username=reader;Password=…")
+       .WithWebDataStudio();
+```
+
+Ein Klon kopiert die Daten, wie sie sind — echte Namen und Adressen inklusive. Wo das nicht in
+Ordnung ist, lieber im Kontextmenü einer Tabelle **Development subset…** nehmen: eine anonymisierte
+Teilmenge als SQL-Skript, die `WithSeedScript` in den nächsten frischen Stack lädt.
+
 ## Als Desktop-Anwendung
 
-Den Build für deine Plattform von der
-[Releases-Seite](https://github.com/fgilde/WebDataStudio/releases) laden, entpacken und starten.
-Er bedient <http://localhost:8080>, öffnet den Browser und legt seine Daten in einem Ordner `data`
-neben der Datei ab.
+Den Build für die eigene Plattform von der
+[Releases-Seite](https://github.com/fgilde/WebDataStudio/releases) laden, entpacken, starten. Das
+Studio läuft dann auf <http://localhost:8080> und öffnet sich **in einem eigenen Fenster** — ohne
+Adressleiste, ohne Tabs, mit Icon in der Taskleiste wie jede andere Anwendung. Die Daten liegen in
+einem Ordner `data` neben der Binärdatei.
+
+Das Fenster ist ein Chromium, das schon auf der Maschine ist — Edge, Chrome, Brave oder Chromium,
+das zuerst gefundene — im App-Modus: ein Fenster ohne Adressleiste und ohne Tab-Leiste. Mitgeliefert
+wird dafür nichts, deshalb bleibt der Download eine Datei. Ist keines davon installiert, öffnet das
+Studio einen normalen Browser-Tab und schreibt das ins Log. `WDS_APP_WINDOW=false` erzwingt den Tab,
+`WDS_OPEN_BROWSER=false` öffnet gar nichts.
+
+## Aus dem Browser installieren
+
+Ein Studio, das offen ist — der Container im Netz, das Deployment einer Kollegin, der Desktop-Build
+— lässt sich ohne Download als App installieren: **WebDataStudio installieren** in der Adresszeile
+von Chrome oder Edge, oder *Als App installieren* im Browsermenü. Das ist dasselbe Fenster ohne
+Adressleiste, mit eigenem Icon, und es zeigt weiter auf das Studio, aus dem es installiert wurde.
+
+Zwischengespeichert wird nichts: das Studio liest lebende Datenbanken, und eine gecachte Antwort wäre
+eine Lüge über deren Inhalt. Das Installieren ändert das Aussehen, nicht das Wissen. Über einfaches
+HTTP jenseits von `localhost` bieten Browser das nicht an — dafür braucht es HTTPS.
 
 ## Erste Abfrage
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Caching.Memory;
 using WebDataStudio.Server.Admin;
+using WebDataStudio.Server.Analysis;
 using WebDataStudio.Server.Drivers.Abstractions;
 using WebDataStudio.Server.Services;
 
@@ -8,10 +9,15 @@ namespace WebDataStudio.Server.Endpoints;
 public static class AdminEndpoints
 {
     public record SystemCommandRequest(string CommandId, string? Target);
-    public record UserRequest(string User, string? Password, string? Privilege, string? Target);
+    public record UserRequest(string User, string? Password, string? Privilege, string? Target,
+        /// What is being done: create, drop, password, login, grant, revoke, grant-role,
+        /// revoke-role. Absent means the old behaviour — a grant if a privilege was named, a new
+        /// account otherwise.
+        string? Action = null, bool? Role = null, bool? CanLogin = null, string? Member = null);
     public record UserApplyRequest(string Hash);
     public record HashRequest(string Password);
     public record DatabaseRequest(string Name);
+    public record JobActionRequest(string Id, string Action);
     public record BackupRequest(
         bool? SchemaOnly, bool? DataOnly, List<string>? Tables, string? ServerPath,
         string? Format, bool? NoOwner, bool? Clean, int? Compress);
@@ -182,23 +188,54 @@ public static class AdminEndpoints
                         message = $"{driver.Info.Label} has no user management",
                     });
 
-                return Results.Ok(await UserAdmin.ListAsync(driver, session, ct));
+                // Accounts and roles in one list: in PostgreSQL they are the same thing, and on the
+                // rest the difference is one flag rather than two panels.
+                return Results.Ok(await Security.ListAsync(driver, session, ct));
+            }));
+
+        // Why somebody can read that table: the roles they are in are in the list above, and these
+        // are the rights granted to them directly.
+        app.MapGet("/api/admin/users/{conn}/grants", (string conn, string user, SessionFactory factory,
+            CancellationToken ct) =>
+            WithSession(conn, factory, ct, async (driver, session) =>
+            {
+                if (!driver.Caps.UserManagement)
+                    return Results.BadRequest(new { message = $"{driver.Info.Label} has no user management" });
+
+                return Results.Ok(await Security.GrantsAsync(driver, session, user, ct));
             }));
 
         app.MapPost("/api/admin/users/{conn}/preview", (string conn, UserRequest body,
             SessionFactory factory, IMemoryCache cache, CancellationToken ct) =>
             WithSession(conn, factory, ct, (driver, _) =>
             {
-                // Every user change is previewed as SQL before it runs, same rule as everywhere else.
-                var sql = body.Privilege is { Length: > 0 }
-                    ? UserAdmin.GrantStatement(driver, body.User, body.Privilege, body.Target ?? "DATABASE")
-                    : UserAdmin.CreateStatement(driver, body.User, body.Password ?? "");
+                // Every account change is previewed as SQL before it runs, same rule as everywhere
+                // else. The action is explicit now; without one it means what it always did.
+                var action = body.Action is { Length: > 0 }
+                    ? body.Action
+                    : body.Privilege is { Length: > 0 } ? "grant" : "create";
 
-                var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(sql))).ToLowerInvariant();
-                cache.Set($"user:{hash}", sql, TimeSpan.FromMinutes(10));
+                try
+                {
+                    var sql = Security.Statement(driver, new SecurityChange(action, body.User,
+                        body.Password, body.Role == true, body.CanLogin != false,
+                        body.Privilege, body.Target ?? "DATABASE", body.Member));
 
-                return Task.FromResult(Results.Ok(new { hash, script = sql }));
+                    var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes(sql))).ToLowerInvariant();
+                    cache.Set($"user:{hash}", sql, TimeSpan.FromMinutes(10));
+
+                    // The script is the answer, and it holds a password when one was set. It is not
+                    // written to the audit trail for exactly that reason — what happened is.
+                    return Task.FromResult(Results.Ok(new
+                    {
+                        hash, script = sql, destructive = action is "drop" or "revoke" or "revoke-role",
+                    }));
+                }
+                catch (NotSupportedException e)
+                {
+                    return Task.FromResult(Results.BadRequest(new { message = e.Message }));
+                }
             }));
 
         app.MapPost("/api/admin/users/{conn}/apply", (string conn, UserApplyRequest body,
@@ -221,6 +258,16 @@ public static class AdminEndpoints
                 return Results.Ok(new { executed = sql });
             }));
 
+        // --- backup and restore ----------------------------------------------
+
+        // What the deployment's backup schedule is doing. A schedule nobody can see is one whose
+        // failures nobody notices, which is the same as not having one.
+        app.MapGet("/api/admin/backup-schedule", (BackupSchedule schedule) => Results.Ok(new
+        {
+            configured = schedule.Configured,
+            jobs = schedule.Read(),
+            runs = schedule.Runs,
+        }));
         // --- backup and restore ----------------------------------------------
         app.MapPost("/api/admin/backup/{conn}", async (string conn, BackupRequest body, HttpContext ctx,
             SessionFactory factory, CancellationToken ct) =>
@@ -360,6 +407,169 @@ public static class AdminEndpoints
             catch (NotSupportedException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         }).DisableAntiforgery();
+
+        // --- how big everything is, and how much bigger than last week --------
+        // The structure panel says one table's size and the treemap says a database's. Neither
+        // answers "which table grew this week", which needs every table at once and a record of what
+        // it was before — so looking also records.
+        app.MapGet("/api/admin/sizes/{conn}", (string conn, int? days, SessionFactory factory,
+            WorkspaceStore workspace, CancellationToken ct) =>
+            WithSession(conn, factory, ct, async (driver, session) =>
+            {
+                if (!TableSizes.Supported(driver.Info.Id))
+                    return Results.Ok(new
+                    {
+                        available = false,
+                        reason = $"{driver.Info.Label} does not report a size per table",
+                        tables = Array.Empty<TableSize>(),
+                        growth = Array.Empty<TableGrowth>(),
+                    });
+
+                var sizes = await TableSizes.ReadAsync(driver, session, ct);
+
+                // Recorded on the way past: the history builds itself rather than needing somebody
+                // to decide to start it.
+                if (sizes.Count > 0)
+                    workspace.AddSizeSamples(conn,
+                        sizes.Select(size => (size.Schema, size.Table, size.Bytes, size.Rows)));
+
+                var window = Math.Clamp(days ?? 30, 1, 365);
+                var samples = workspace
+                    .ListSizeSamples(conn, DateTimeOffset.UtcNow.AddDays(-window))
+                    .Select(sample => new SizeGrowth.Sample(sample.Schema, sample.Table,
+                        sample.Bytes, sample.Rows, sample.At));
+
+                return Results.Ok(new
+                {
+                    available = true,
+                    reason = (string?)null,
+                    days = window,
+                    tables = sizes.Take(100),
+                    growth = SizeGrowth.Between(samples),
+                });
+            }));
+
+        // --- what ran in the next minute --------------------------------------
+        // Sampling rather than tracing: the server's own list of what it is doing, read once a
+        // second. A statement that starts and finishes between two samples is missed, and the panel
+        // says so — Extended Events is the real answer and needs permissions a studio should not ask
+        // for.
+        app.MapPost("/api/admin/capture/{conn}", (string conn, int? seconds,
+            StatementCapture capture, SessionFactory factory, CancellationToken ct) =>
+            WithSession(conn, factory, ct, (driver, _) =>
+                Task.FromResult(driver.Caps.SessionList
+                    ? Results.Ok(capture.Start(conn, seconds ?? 60))
+                    : Results.BadRequest(new
+                    {
+                        message = $"{driver.Info.Label} cannot say what it is running",
+                    }))));
+
+        app.MapGet("/api/admin/capture/{conn}", (string conn, StatementCapture capture) =>
+            Results.Ok(capture.Status(conn)));
+
+        // "So what should I change?" — the capture and the index advisor together: the same advice
+        // asked for by several of the statements that ran, ordered by how much of the minute it
+        // would help.
+        app.MapGet("/api/admin/capture/{conn}/advice", (string conn, StatementCapture capture,
+            SessionFactory factory, CancellationToken ct) =>
+            WithSession(conn, factory, ct, async (driver, session) =>
+            {
+                var state = capture.Status(conn);
+
+                if (state.Statements.Count == 0)
+                    return Results.Ok(new
+                    {
+                        state = state.State,
+                        reason = "nothing has been captured on this connection yet",
+                        advice = Array.Empty<CaptureAdvice>(),
+                    });
+
+                return Results.Ok(new
+                {
+                    state = state.State,
+                    reason = (string?)null,
+                    advice = await CaptureAdvisor.SuggestAsync(driver, session, state.Statements, ct),
+                });
+            }));
+
+        app.MapDelete("/api/admin/capture/{conn}", (string conn, StatementCapture capture) =>
+        {
+            capture.Stop(conn);
+            return Results.Ok(capture.Status(conn));
+        });
+
+        // --- scheduled jobs ---------------------------------------------------
+        app.MapGet("/api/admin/jobs/{conn}", (string conn, SessionFactory factory,
+            CancellationToken ct) =>
+            WithSession(conn, factory, ct, async (driver, session) =>
+            {
+                var scheduler = JobService.SchedulerOf(driver.Info.Id);
+
+                if (!driver.Caps.Jobs || scheduler is null)
+                    return Results.Ok(new
+                    {
+                        available = false,
+                        scheduler = (string?)null,
+                        reason = $"{driver.Info.Label} has no scheduler of its own",
+                        jobs = Array.Empty<JobEntry>(),
+                        actions = Array.Empty<JobAction>(),
+                    });
+
+                // An empty list is not a failure: pg_cron may not be installed, the Agent service
+                // may be off, the event scheduler may be disabled. The panel says what it looked in.
+                return Results.Ok(new
+                {
+                    available = true,
+                    scheduler,
+                    reason = (string?)null,
+                    jobs = await JobService.ListAsync(driver, session, ct),
+                    actions = JobService.ActionsFor(driver.Info.Id),
+                });
+            }));
+
+        app.MapGet("/api/admin/jobs/{conn}/history", (string conn, string id, int? limit,
+            SessionFactory factory, CancellationToken ct) =>
+            WithSession(conn, factory, ct, async (driver, session) =>
+                driver.Caps.Jobs
+                    ? Results.Ok(await JobService.HistoryAsync(driver, session, id, limit ?? 50, ct))
+                    : Results.BadRequest(new { message = $"{driver.Info.Label} has no scheduler" })));
+
+        // Changing a job is a statement, not a click: it comes back as SQL and goes through the
+        // editor's own run, like every other change in this studio.
+        app.MapPost("/api/admin/jobs/{conn}/statement", (string conn, JobActionRequest body,
+            SessionFactory factory, CancellationToken ct) =>
+            WithSession(conn, factory, ct, async (driver, session) =>
+            {
+                if (!driver.Caps.Jobs)
+                    return Results.BadRequest(new { message = $"{driver.Info.Label} has no scheduler" });
+
+                var job = (await JobService.ListAsync(driver, session, ct))
+                    .FirstOrDefault(entry => entry.Id == body.Id || entry.Name == body.Id);
+
+                if (job is null)
+                    return Results.NotFound(new { message = $"no job '{body.Id}'" });
+
+                var sql = JobService.Statement(driver, body.Action, job);
+
+                return sql is null
+                    ? Results.BadRequest(new
+                    {
+                        message = $"{JobService.SchedulerOf(driver.Info.Id)} cannot " +
+                                  $"{body.Action.ToLowerInvariant()} a job",
+                    })
+                    : Results.Ok(new { sql });
+            }));
+
+        // --- who did what -----------------------------------------------------
+        // Under /api/admin, so the middleware that guards that prefix guards this too: a trail a
+        // viewer could read is a trail that tells them which tables are worth looking at.
+        app.MapGet("/api/admin/audit", (string? user, string? conn, string? search, int? limit,
+            AuditTrail trail) =>
+            Results.Ok(new
+            {
+                enabled = trail.Enabled,
+                entries = trail.List(user, conn, search, limit ?? 200),
+            }));
 
         // --- server logs ------------------------------------------------------
         app.MapGet("/api/admin/logs/{conn}", (string conn, int? lines, SessionFactory factory,

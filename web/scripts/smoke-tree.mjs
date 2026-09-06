@@ -52,21 +52,36 @@ try {
 
 // --- create an index through the designer's index tab --------------------------------------
 const indexName = `ix_smoke_${Date.now()}`;
+
+// A run that failed part-way leaves its index behind, and a second index over the same column is
+// nothing to change — which would fail this check for the wrong reason. So every index this smoke
+// ever made is dropped first.
+{
+  const id = await connectionId();
+  const children = await (await page.request.get(
+    `${baseUrl}/api/schema/${id}?parent=${encodeURIComponent("Table:main/orders")}`)).json();
+
+  for (const leftover of children.filter(node => node.label.startsWith("ix_smoke_")))
+    await page.request.post(`${baseUrl}/api/query/execute`, {
+      data: { connectionId: id, sql: `DROP INDEX "${leftover.label}"` },
+    });
+}
 try {
   await page.getByText("Indexes…").first().click();
   await page.getByText(/^Indexes of/).waitFor({ timeout: 15000 });
   await page.getByRole("button", { name: "Add index", exact: true }).click();
 
-  // The row that was just added, found by its generated name. Addressing the first row would
-  // target an index the table already has, and the designer keeps every tab panel mounted, so a
-  // positional locator can land in a hidden one.
-  //
-  // The column comes first and the name last: renaming the row makes this locator stop matching,
-  // because Playwright resolves it again on every use.
-  const row = page.locator("tbody tr").filter({ has: page.locator("input[value^='ix_orders_']") }).last();
+  // The row that was just added: the last one in the tab that is open. The designer keeps every tab
+  // panel mounted, so an unscoped locator lands in a hidden one — and matching on the generated name
+  // through the value attribute does not work either, because React sets it as a property.
+  const row = page.locator('[role="tabpanel"]:visible tbody tr').last();
 
   await row.locator(".mantine-MultiSelect-input").click();
-  await page.locator("[role=option]").filter({ hasText: "person_id" }).first().click();
+  // Only the dropdown that is open: the designer keeps every row's select mounted, so an option
+  // matched anywhere on the page can be one nobody can click.
+  // A column the table is not already indexed on: the designer treats a second index over the same
+  // columns as nothing to change, which is right and would make this check prove nothing.
+  await page.locator("[role=option]:visible").filter({ hasText: "placed" }).first().click();
   await page.keyboard.press("Escape");
 
   await row.locator("input").first().fill(indexName);
@@ -89,7 +104,11 @@ if (!labels.includes(indexName)) {
 
 async function connectionId() {
   const response = await page.request.get(`${baseUrl}/api/connections`);
-  return (await response.json())[0].id;
+  const connections = await response.json();
+
+  // The demo database, not whichever connection happens to be first: a studio with a bucket attached
+  // lists that one too, and a bucket has no tables to index.
+  return (connections.find(c => c.name === "DEMO") ?? connections[0]).id;
 }
 
 await page.screenshot({ path: "smoke-tree.png" });

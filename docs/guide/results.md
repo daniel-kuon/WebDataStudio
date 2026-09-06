@@ -28,6 +28,23 @@ A switch above the grid picks how to read the same result:
 - Double-click a cell to open the value viewer: text, JSON, XML, hex, images and BLOB download.
 - `NULL` is drawn differently from an empty string, because the difference matters.
 
+## Paging a table
+
+The bar under a data tab says which rows are on screen — `1–200 of 12,345` — rather than only which
+page number is highlighted. Next to it:
+
+- **first, previous, next, last**, so the end of a table is one click away;
+- a **page box** once there are more than five pages: type `1400`, press Enter;
+- **rows per page**, from 25 to 5000. It is the preference, so it holds for the next table too, and
+  the row you were looking at stays on screen: changing 200 to 25 on page 14 lands on page 105, not
+  on page 14 of something else.
+
+Two things about the total. On PostgreSQL, SQL Server and MySQL it comes from the catalogue, which is
+an estimate — shown as `of ≈12,345`. And a filter narrows the result without changing what the
+catalogue knows, so the total then reads `of ?` rather than a number about a different set of rows.
+The **∑** button next to it counts for real, filter included; on a large table that is a scan, which
+is why it is a button rather than something the studio does by itself.
+
 ## The filter language
 
 ![The column menu: the filter box and the values the column holds](../assets/screenshots/filter-dark.png)
@@ -73,6 +90,59 @@ common first, as checkboxes — the Excel-style filter. Ticking values writes th
 as `=a,=b`, so it is a way of typing rather than a second kind of filter, and it can be edited
 afterwards. A masked column has no list: the distinct values of a column of secrets are the secrets.
 
+## Timestamps and time zones
+
+A timestamp arrives from the driver as `2026-08-29T14:00:00.0000000Z` — correct, and not what
+anybody reads. The grid shows `2026-08-29 14:00:00`, keeps a fraction only when it says something,
+and hovering a cell still shows the raw value, because "which one is it really" is exactly the
+question this is about.
+
+**Which clock.** *Show timestamps in* in the [preferences](shortcuts.md#preferences-and-rebinding)
+is this computer's zone, UTC, or a named zone. It changes only what is shown; nothing is rewritten
+on the way into the database. When it is not your own zone, the footer says so — `times in UTC` —
+so a screenshot cannot be misread later.
+
+**A value with no zone is never converted.** `timestamp without time zone` holding 14:00 means
+14:00; turning it into 16:00 because the reader sits in Berlin would be an invention. Those cells
+carry a dotted underline and say `no time zone` on hover, and the column header says which of the
+two the column is (`timestamptz — stored with a time zone`). That difference is where the "we
+deleted the wrong day" class of accident comes from.
+
+## Pivot
+
+The grid answers "what is in here" and grouping answers "how many per status". **Pivot** is the
+third question — "how many per status *per month*" — and it is answered over the rows already on
+screen rather than by writing a `GROUP BY` first.
+
+Pick a column for the rows, one for the columns, and what to do with the numbers: how many, sum,
+average, smallest, largest. `count` needs no value column at all, which is why it is the default.
+A value that is not a number is left out rather than counted as zero — an average over "the ones
+that had a number" is an answer, one that folded nulls in is not. Null gets a name of its own,
+`(none)`, because grouping by it is a real question. The column field stops at sixty distinct
+values and says so: a pivot with nine hundred columns is a scroll bar, not an answer.
+
+## A dashboard
+
+**Tools → Dashboard** is a page of statements side by side: the number somebody asks for every
+morning, the table checked after a deployment, a bar per row for "how many per status".
+
+A tile is a title, a connection, a statement and what to draw with it — one number, a table, or a
+bar per row. It takes one to four of the four columns, and the page can run itself every so often
+(ten seconds at the fastest; below that it is a load test rather than a dashboard). The arrow on a
+tile opens its statement in a query tab, which is where anything beyond looking happens.
+
+Nothing here can do what a query tab cannot: a tile runs through the same endpoint, with the same
+row cap, the same masking and the same line in the [audit trail](administration.md#audit). A tile
+whose statement fails says so on the tile rather than leaving an empty box, and one run at a time
+per tile — a statement slower than the interval does not pile up behind itself.
+
+Dashboards live in the studio's workspace file, so they survive a restart and follow the workspace
+rather than one browser. A studio without one says so instead of losing the page.
+
+**A dashboard a deployment ships** comes from `WDS_DASHBOARD_FILE` — a JSON file of the same shape,
+or `WithDashboards(...)` in an Aspire app host. It carries a *from the deployment* badge, its edit
+and delete buttons are off, and somebody who wants it different saves a copy under another name.
+
 ## Geography
 
 ![The map view](../assets/screenshots/map-dark.png)
@@ -101,10 +171,56 @@ encoding, quoting, header row, `NULL` representation and date format are all you
 Exports stream: the server never builds the whole file in memory, so a million-row CSV costs the
 same memory as a thousand-row one.
 
+### Templates of your own
+
+**Templates…** in the export dialog writes an export format: an id, a name, a file extension, a
+content type, and up to three pieces of text.
+
+| Placeholder | Is |
+|---|---|
+| `{{table}}` | the table or the export's name |
+| `{{columns}}` | the column names, joined |
+| `{{values}}` | the row's values, joined |
+| `{{col.name}}` | one column by name |
+| `{{index}}` | the row number, from one |
+| `{{comma}}` | a comma on every row but the last |
+
+Each takes a filter for the escaping that format needs: `{{values|sql}}`, and `json`, `csv`, `html`,
+`upper`, `lower`. So an `INSERT` writer is three lines:
+
+```
+header: INSERT INTO {{table}} ({{columns}}) VALUES
+row:      ({{values|sql}}){{comma}}
+footer: ;
+```
+
+DataGrip calls these extractors and writes them in Groovy, which makes an export format a program the
+studio would have to run. These are text, and there is nothing in them to execute. A template saved
+here belongs to this studio; `WDS_EXPORT_TEMPLATES_DIR` mounts a folder of them for a deployment, and
+those are read-only in the UI — a copy under another id is the way to change one.
+
 ## Copy
 
 The **Copy** menu puts the result on the clipboard as CSV, JSON or a Markdown table, and a
 selection as a SQL `IN` list — the fastest way to move a set of ids into the next query.
+
+## Keep this result as a table
+
+**As table** next to a result writes it back into a database as a table of its own: the join you
+have just worked out, kept for the next time somebody asks.
+
+The dialog names it, offers a schema, and asks which connection it goes into — this one by default,
+any other if the answer belongs somewhere else. Before anything is created it shows the exact
+`CREATE TABLE`, and:
+
+- **Same engine on both sides**, and the columns keep the types they already have.
+- **Another engine**, and each column gets the nearest type the target has — widened rather than
+  guessed at, because a column you can narrow afterwards beats one that quietly rounded.
+- A column with no name becomes `column1`; two columns with the same name become `name` and
+  `name_2`. Both are ordinary in a result and impossible in a table.
+
+The rows are read from the database again rather than copied off the screen, so what lands in the
+table is the whole result and not the first page of it. A read-only connection refuses, and says so.
 
 ## Import
 
@@ -113,6 +229,13 @@ preview, and lets you map file columns to table columns. Rows that fail are repo
 rather than aborting the whole file.
 
 **Copy to another connection…** moves a table between two connections, including across engines.
+
+**New table from a file…** is the other import: the one for a CSV somebody was sent, where there is no
+table yet. Pick the file — an upload, or an object in a [bucket](storage.md), which is read where it
+lies — and the studio describes it first: the columns it found, the type each one becomes on the
+target engine, ten rows as they will arrive, and the `CREATE TABLE` itself. Nothing is created until
+that has been read. Parquet, CSV, TSV, JSON and NDJSON are understood, and a whole prefix of files
+with the same shape counts as one table.
 
 ## Watching a query
 
@@ -128,6 +251,35 @@ changed, 1 added, 1 gone".
 - The highlight is skipped while the grid sorts or filters, because then a row's position is no
   longer the row the comparison was about.
 
+## What is inside a JSON column
+
+A JSONB column is one cell of text in the grid, and reading one row of it is a guess. **What is in
+this column?** in a JSON column's header menu reads a sample of the documents and answers with the
+shape: which paths exist, how often each one is present, which types it holds, and an example value.
+
+Paths are ordered by depth and then by where they were first seen, so the shape reads like the
+document rather than like an alphabetical list. Each path carries the expression that reads it **on
+this engine** — `->>`, `JSON_VALUE`, `json_extract_string` — so nothing has to know one engine's
+spelling from another's, and there is one **Flatten** statement that turns the value paths into
+columns, ready for a query tab. Arrays and objects are left out of that statement: a column cannot
+hold a subtree.
+
+![What is inside a JSON column](../assets/screenshots/json-shape-dark.png)
+
+Sampling is the honest part of this. The report says how many documents it read and how many of them
+parsed; a column with a hundred shapes in it will say so rather than presenting the first one as the
+truth.
+
+## Following a table
+
+A table that is being written to can be watched from the data tab: pick a key column — an id, a
+timestamp, an auto-increment — an interval, and the page re-reads itself in that order with the newest
+first. **Rows that arrived since the last read are tinted**, so an insert is visible without diffing
+two screenshots.
+
+Only key columns are offered. Ordering by a foreign key and calling the result "newest" would be a
+lie the tint makes convincing, so the list is restricted to what actually counts up.
+
 ## Browsing a table
 
 A table opened with a double-click gets the same **Copy** and **Export** actions as a query result:
@@ -135,6 +287,40 @@ copy takes the page on screen, export streams the whole table. Its column header
 sorting and filtering, and both run on the server — a page holds 200 of possibly millions of rows,
 so sorting in the browser would order the wrong set. How many rows a page holds is a
 [preference](shortcuts.md#preferences-and-rebinding).
+
+### An engine that has no SQL
+
+The data tab does not build a `SELECT` for MongoDB or Redis — it asks the driver for the page, and the
+driver builds it the way its engine can:
+
+- A **MongoDB collection** is read with `find().sort().skip().limit()`. The column filter is
+  translated into the query: `^ada` becomes an anchored regular expression, `>10` a `$gt` with a
+  number, `=a,=b` an `$in`, `NULL` a null check. Paging and sorting happen in the server, so the
+  order is over the collection rather than over the page. The columns are the shape the structure
+  panel sampled, and a field this page turned up that the sample never saw is added at the end and
+  marked `unsampled` — documents have no schema, and that is the point of showing them. A nested
+  document or an array stays JSON in its cell, so the column menu's "what is in this JSON" applies to
+  it just as it does to a JSONB column.
+- A **Redis database or prefix folder** is read as the keys it holds: the key, its type, its TTL in
+  seconds, its length and what it costs in memory. That is the inventory people actually want out of a
+  cache, and it sorts, filters and exports like any other grid. A key space is scanned rather than
+  indexed, so a page looks at the first 20 000 keys and the footer says so when it stopped there.
+  `MEMORY USAGE` is not available on every managed Redis; where it is refused the column stays empty
+  rather than the page failing.
+- A **single Redis key** is read as the table its type makes: field and value for a hash, index and
+  value for a list, the members of a set, member and score for a sorted set, id and fields for a
+  stream, the value and its length for a string. A double-click still opens a key in the
+  [key browser](redis.md), which is where its value can be edited; the grid is the other way to look
+  at it, and the way to sort or filter it.
+
+Two things follow from having no SQL. The grid is **read-only**, and it says which command writes
+instead — `updateOne` for a document, `HSET` for a hash field — rather than showing a save button that
+cannot work. And the column menu offers no list of the values a column holds: counting them is a
+`GROUP BY`, so that request is refused with a reason and the filter is typed instead.
+
+Whatever the engine could not do with the query is written into the footer next to the row count
+rather than silently dropped: a filter with no translation, a sort a key space has no order of its
+own for, a scan that stopped at its cap.
 
 ## History
 
@@ -238,3 +424,20 @@ WDS_SCHEDULE_OUTPUT_DIR=/data/exports          # the default
 - The file is re-read every minute, so editing the schedule needs no restart.
 - `GET /api/schedule` reports the jobs and what each last did; `POST /api/schedule/{name}/run` runs
   one now. A failed run is a message when [alerts](administration.md#alerts) are configured.
+
+## A saved query as a form
+
+Saved queries, bind parameters and shared links each existed on their own. **Reports** is the shape
+somebody who does not write SQL can use: pick the report, fill in the boxes, press run.
+
+A saved query becomes a report as soon as it names a connection, and the boxes are the bind
+parameters it already had — `:from` and `:to` on PostgreSQL and Oracle, `$from` on SQLite and DuckDB,
+`@from` on SQL Server and MySQL, the same markers the editor offers.
+
+**The link carries the values.** `/report/<id>?from=2026-06-01&to=2026-06-30` runs by itself when it
+is opened, so "the numbers for last month" is something to send rather than something to explain.
+*Copy link* writes it, and *Download CSV* takes the answer away.
+
+Reading only, whatever the saved query says: a report is pressed by people who are not reading the
+SQL, so one that changes data is refused with that sentence rather than run. It is behind the same
+login as the rest of the studio, and masked columns stay masked.

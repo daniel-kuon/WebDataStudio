@@ -120,44 +120,155 @@ public static class AnalysisEndpoints
 
     /// Describes only the tables the statement actually mentions, so the advisor never walks a
     /// whole catalogue to answer one query.
-    private static async Task<Dictionary<string, ObjectDetail>> LoadTablesAsync(IDbDriver driver,
-        IDbSession session, string sql, CancellationToken ct)
+    /// Whether a suggested index actually helps: the plan before it, the plan with it, and the index
+    /// dropped again.
+    public static void MapIndexTrialEndpoints(this WebApplication app)
     {
-        var wanted = PredicateExtractor.Aliases(sql).Values
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        if (wanted.Count == 0) return [];
-
-        var found = new Dictionary<string, ObjectDetail>(StringComparer.OrdinalIgnoreCase);
-        var queue = new Queue<SchemaNodeRef?>();
-        queue.Enqueue(null);
-        var visited = 0;
-
-        while (queue.Count > 0 && visited++ < 100 && found.Count < wanted.Count)
+        app.MapPost("/api/analyze/{conn}/try-index", async (string conn, TryIndexRequest body,
+            HttpContext ctx, SessionFactory factory, ConnectionRegistry connections,
+            CancellationToken ct) =>
         {
-            var parent = queue.Dequeue();
-            IReadOnlyList<SchemaNode> nodes;
-            try { nodes = await driver.IntrospectAsync(session, parent, ct); }
-            catch (Exception) { continue; }
+            var spec = connections.Find(conn);
 
-            foreach (var node in nodes)
-            {
-                if (node.Ref.Kind == SchemaNodeKind.Table)
+            if (spec is null) return Results.NotFound(new { message = $"no connection '{conn}'" });
+
+            // Building an index takes locks and time on the table it is built over. "It was only a
+            // trial" is no comfort at 3am, so the two connections the studio refuses to write to are
+            // refused here as well.
+            if (spec.ReadOnly)
+                return Results.BadRequest(new
                 {
-                    if (!wanted.Contains(node.Ref.Name, StringComparer.OrdinalIgnoreCase)) continue;
-                    if (found.ContainsKey(node.Ref.Name)) continue;
+                    message = "this connection is read-only, and a trial has to create the index to "
+                              + "measure it",
+                });
 
-                    try { found[node.Ref.Name] = await driver.DescribeAsync(session, node.Ref, ct); }
-                    catch (Exception) { /* a table we cannot describe simply gets no advice */ }
-                    continue;
-                }
+            if (string.Equals(spec.Color, "red", StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new
+                {
+                    message = "this connection is marked as production. Building an index there takes "
+                              + "locks and time, so try it on a copy first.",
+                });
 
-                if (node.HasChildren && node.Ref.Kind is not (SchemaNodeKind.Table or SchemaNodeKind.View))
-                    queue.Enqueue(node.Ref);
+            if (string.IsNullOrWhiteSpace(body.Sql) || string.IsNullOrWhiteSpace(body.Ddl))
+                return Results.BadRequest(new
+                {
+                    message = "give both the statement to plan and the CREATE INDEX to try",
+                });
+
+            Audit.Detail(ctx, $"tried an index: {body.Ddl}", conn);
+
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                    return Results.Ok(await IndexTrial.RunAsync(driver, session, body.Sql, body.Ddl, ct));
             }
-        }
-
-        return found;
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (NotSupportedException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
     }
+
+    public record TryIndexRequest(string Sql, string Ddl);
+
+    /// Rules about the data rather than about the schema, and the results of running them.
+    public static void MapQualityEndpoints(this WebApplication app)
+    {
+        app.MapGet("/api/quality/{conn}", (string conn, QualityRunner rules) =>
+            Results.Ok(rules.For(conn)));
+
+        app.MapPut("/api/quality/{conn}", (string conn, QualityRule body, QualityRunner rules) =>
+        {
+            if (body.Table.Trim().Length == 0)
+                return Results.BadRequest(new { message = "a rule needs a table" });
+
+            var rule = body with
+            {
+                ConnectionId = conn,
+                Id = body.Id is { Length: > 0 } id ? id : Guid.NewGuid().ToString("N")[..12],
+            };
+
+            rules.Save(rule);
+            return Results.Ok(rule);
+        });
+
+        app.MapDelete("/api/quality/{conn}/{id}", (string conn, string id, QualityRunner rules) =>
+        {
+            try
+            {
+                rules.Delete(id);
+                return Results.NoContent();
+            }
+            catch (InvalidOperationException e) { return Results.BadRequest(new { message = e.Message }); }
+        });
+
+        // What each rule counted, over time. A rule's answer is a count, and a count over time is the
+        // difference between "twelve rows are wrong" and "it is getting worse".
+        app.MapGet("/api/quality/{conn}/history", (string conn, int? days, QualityRunner rules,
+            WorkspaceStore workspace) =>
+        {
+            var window = Math.Clamp(days ?? 30, 1, 365);
+
+            if (!workspace.Available)
+                return Results.Ok(new { days = window, rules = Array.Empty<object>() });
+
+            var runs = workspace.ListQualityRuns(conn, DateTimeOffset.UtcNow.AddDays(-window));
+            var known = rules.For(conn).ToDictionary(rule => rule.Id);
+
+            return Results.Ok(new
+            {
+                days = window,
+                rules = runs
+                    .GroupBy(run => run.RuleId)
+                    .Select(group => new
+                    {
+                        ruleId = group.Key,
+                        table = known.TryGetValue(group.Key, out var rule) ? rule.Table : null,
+                        column = known.TryGetValue(group.Key, out var named) ? named.Column : null,
+                        kind = known.TryGetValue(group.Key, out var kind) ? kind.Kind.ToString() : null,
+                        runs = group.Count(),
+                        first = group.First().Violations,
+                        last = group.Last().Violations,
+                        worst = group.Max(run => run.Violations),
+                        // Better, worse or the same: the sentence somebody actually needs.
+                        trend = QualityRules.Describe(group.First().Violations, group.Last().Violations),
+                        points = group.Select(run => new
+                        {
+                            at = run.At,
+                            run.Violations,
+                            failed = run.Error is { Length: > 0 },
+                        }),
+                    })
+                    .OrderByDescending(entry => entry.last)
+                    .ToList(),
+            });
+        });
+
+        app.MapPost("/api/quality/{conn}/run", async (string conn, QualityRunner rules,
+            CancellationToken ct) =>
+        {
+            try
+            {
+                var results = await rules.RunAsync(conn, ct);
+
+                return Results.Ok(new
+                {
+                    ran = results.Count,
+                    failing = results.Count(result => !result.Passed),
+                    results,
+                });
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+    }
+
+    /// The tables a statement mentions. The walk itself lives in Analysis/TableLoader.cs, because
+    /// the capture's advice needs exactly the same thing.
+    private static Task<Dictionary<string, ObjectDetail>> LoadTablesAsync(IDbDriver driver,
+        IDbSession session, string sql, CancellationToken ct) =>
+        TableLoader.LoadAsync(driver, session, sql, ct);
 
     private static IReadOnlyList<AnalyzeFinding> Deduplicate(IEnumerable<AnalyzeFinding> findings) =>
         findings

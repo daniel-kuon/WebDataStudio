@@ -1,4 +1,4 @@
-const base = "/api";
+export const base = "/api";
 
 export interface Me {
   anonymous: boolean; authenticated: boolean; username: string | null;
@@ -6,11 +6,19 @@ export interface Me {
   role?: string | null;
   /// Name of this studio, from WDS_TITLE. Null when nothing named it.
   title?: string | null;
+  /// The theme this deployment wants the studio to start in, from WDS_THEME. A person's own choice
+  /// is kept in their browser and wins over it.
+  theme?: string | null;
+  /// The identity provider, where one is configured. `only` means there are no local accounts, so
+  /// the login screen has nothing else to offer.
+  sso?: { enabled: boolean; label: string; only: boolean };
 }
 export interface Connection {
   id: string; name: string; engine: string; readOnly: boolean;
   color: string | null; group: string | null; source: "Environment" | "Stored"; summary: string;
   tunnelled: boolean;
+  /// This connection is one a person signs in to rather than one the machine can open on its own.
+  interactive?: boolean;
 }
 export interface TunnelInput {
   host: string; port: number; user: string;
@@ -63,6 +71,8 @@ export interface HealthDto {
   mcp?: {
     path: string; writes: boolean; needsKey: boolean; enabled: boolean; reason: string | null;
   } | null;
+  /// Where the rich file viewer is fetched from, or null for a studio without one.
+  fileViewer?: { script: string } | null;
 }
 
 export const health = (): Promise<HealthDto> => fetch(`${base}/health`).then(r => ok<HealthDto>(r));
@@ -75,6 +85,19 @@ export const login = (username: string, password: string): Promise<Me> =>
   });
 
 export const logout = (): Promise<void> => fetch(`${base}/auth/logout`, { method: "POST" }).then(() => undefined);
+
+/// Is this server still there, and how far away is it? One round trip, measured now — nothing is
+/// stored and nothing is remembered between calls.
+export interface ConnectionHealthDto { ok: boolean; milliseconds: number; message: string }
+
+export const checkConnectionHealth = (id: string): Promise<ConnectionHealthDto> =>
+  fetch(`${base}/connections/${id}/health`).then(r => ok<ConnectionHealthDto>(r));
+
+/// What is in this database, in one Markdown file: every table, its columns, what points where,
+/// and the notes people left on objects here.
+export const readDataDictionary = (id: string, schema?: string): Promise<string> =>
+  fetch(`${base}/dictionary/${id}${schema ? `?schema=${encodeURIComponent(schema)}` : ""}`)
+    .then(async r => (r.ok ? r.text() : fail(r)));
 
 export const listConnections = (): Promise<Connection[]> =>
   fetch(`${base}/connections`).then(r => ok<Connection[]>(r));
@@ -178,20 +201,35 @@ export interface ExportFormatDto {
 export const listExportFormats = (): Promise<ExportFormatDto[]> =>
   fetch(`${base}/export/formats`).then(r => ok<ExportFormatDto[]>(r));
 
+/// One column of a data page. `masked` is the server saying it replaced the values; the grid offers a
+/// reveal rather than leaving somebody wondering why a value looks like dots.
+export interface DataColumnDto {
+  name: string;
+  dataType: string;
+  nullable: boolean;
+  masked?: boolean;
+}
+
 export interface DataPageDto {
-  // `masked` is the server saying it replaced this column's values; the grid offers a reveal
-  // rather than leaving somebody wondering why a value looks like dots.
-  columns: { name: string; dataType: string; nullable: boolean; masked?: boolean }[];
+  columns: DataColumnDto[];
   rows: unknown[][];
   editable: boolean;
   keyColumns: string[];
   reason: string | null;
   totalEstimate: number | null;
+  /// Whether that number is the catalogue's guess rather than a count of this result. True for the
+  /// SQL engines, where it is also blind to the filter — countRows answers exactly, on request.
+  totalIsEstimate?: boolean;
+  /// Whether a filter narrowed this page, which is when the estimate stops describing it at all.
+  filtered?: boolean;
   offset: number;
   limit: number;
   /// Column names that came from the table a foreign key points at. Read-only: an edit here would
   /// be an update to a row this grid is not addressing.
   lookups?: string[];
+  /// What the engine could not do with this query — a filter MongoDB has no date periods for, a
+  /// sort a key space has no order for, a key scan that stopped at its cap. Shown, not swallowed.
+  note?: string | null;
 }
 export interface ChangePreviewDto {
   hash: string; script: string; statementCount: number; destructive: boolean;
@@ -249,6 +287,18 @@ export interface ReferencingKeyDto {
 
 export const referencingKeys = (conn: string, ref: string): Promise<ReferencingKeyDto[]> =>
   fetch(`${base}/schema/${conn}/referencing?${refQuery(ref)}`).then(r => ok<ReferencingKeyDto[]>(r));
+
+/// How many rows there really are, filter included. A scan on a large table, so it is asked for
+/// rather than shown by itself.
+export const countRows = (conn: string, ref: string,
+  params: { filterColumn?: string; filter?: string } = {}): Promise<{ total: number | null }> => {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") query.set(key, String(value));
+  }
+  return fetch(`${base}/data/${conn}/count?${refQuery(ref, query)}`)
+    .then(r => ok<{ total: number | null }>(r));
+};
 
 export interface StudioUserDto {
   name: string; role: string; connections: string[]; hashed: boolean;
@@ -519,7 +569,105 @@ export const previewUndo = (conn: string, ref: string): Promise<ChangePreviewDto
   fetch(`${base}/data/${conn}/undo/preview?${refQuery(ref, new URLSearchParams())}`,
     { method: "POST" }).then(r => ok<ChangePreviewDto>(r));
 
+/// A saved query offered as a form: what it is called, what it asks for, and the statement itself.
+export interface ReportDto {
+  id: string;
+  name: string;
+  folder: string | null;
+  connectionId: string;
+  parameters: string[];
+  sql: string;
+}
+
+export interface ReportResultDto {
+  name: string;
+  columns: { name: string; dataType: string }[];
+  rows: (string | number | boolean | null)[][];
+  truncated: boolean;
+}
+
+export const listReports = (): Promise<ReportDto[]> =>
+  fetch(`${base}/reports`).then(r => ok<ReportDto[]>(r));
+
+/// Runs one, reading only and capped. A saved query that changes data is not offered as a report.
+export const runReport = (id: string, parameters: Record<string, string>):
+  Promise<ReportResultDto> =>
+  fetch(`${base}/reports/${encodeURIComponent(id)}/run`, json("POST", { parameters }))
+    .then(r => ok<ReportResultDto>(r));
+
+/// A note somebody left on an object: what a column really means, why a table is shaped this way.
+export interface ObjectNoteDto {
+  id: number;
+  connectionId: string;
+  objectRef: string;
+  author: string;
+  body: string;
+  at: string;
+}
+
+export const objectNotes = (conn: string, ref: string): Promise<ObjectNoteDto[]> =>
+  fetch(`${base}/notes/${conn}?${refQuery(ref)}`).then(r => ok<ObjectNoteDto[]>(r));
+
+export const addNote = (conn: string, ref: string, body: string): Promise<ObjectNoteDto> =>
+  fetch(`${base}/notes/${conn}`, json("POST", { ref, body })).then(r => ok<ObjectNoteDto>(r));
+
+export const deleteNote = (conn: string, id: number): Promise<void> =>
+  fetch(`${base}/notes/${conn}/${id}`, { method: "DELETE" }).then(r => ok<void>(r));
+
+/// Notes across every object of every connection: the studio's own answer to "somebody wrote
+/// something about this once".
+export const searchNotes = (search: string): Promise<ObjectNoteDto[]> =>
+  fetch(`${base}/notes?search=${encodeURIComponent(search)}`).then(r => ok<ObjectNoteDto[]>(r));
+
 export interface MaskPolicyDto { maskByDefault: boolean; extra: string[]; never: string[] }
+
+/// What one column actually holds, counted rather than guessed.
+export interface ProfileColumnDto {
+  name: string;
+  dataType: string;
+  nonNull: number;
+  nulls: number;
+  nullPercent: number;
+  /// Null for a type the engine refuses to group by — a blob, a geometry.
+  distinct: number | null;
+  min: string | null;
+  max: string | null;
+  unique: boolean;
+  constant: boolean;
+  masked: boolean;
+}
+
+/// A column the sampled values gave away, whatever it is called.
+export interface ProfileHintDto {
+  column: string;
+  looks: string;
+  matches: number;
+  sampled: number;
+  percent: number;
+  masked: boolean;
+}
+
+export interface ProfileSuggestionDto {
+  column: string;
+  kind: string;
+  argument: string | null;
+  why: string;
+}
+
+export interface ProfileDto {
+  note: string | null;
+  rows: number;
+  columns: ProfileColumnDto[];
+  hints: ProfileHintDto[];
+  suggestions: ProfileSuggestionDto[];
+}
+
+/// The numbers behind a table, and what they suggest: one statement for the counts, a sample of the
+/// rows for the patterns.
+export const profileObject = (conn: string, ref: string, sample?: number): Promise<ProfileDto> =>
+  fetch(`${base}/data/${conn}/profile?${refQuery(ref,
+    sample ? new URLSearchParams({ sample: String(sample) }) : undefined)}`)
+    .then(r => ok<ProfileDto>(r));
 
 export const getMaskPolicy = (conn: string): Promise<MaskPolicyDto> =>
   fetch(`${base}/data/${conn}/mask-policy`).then(r => ok<MaskPolicyDto>(r));
@@ -564,6 +712,28 @@ export interface ServerStatsDto {
   metrics: { name: string; value: string; detail: string | null }[];
   blocking: { sessionId: string; blockedBy: string; query: string; waitMs: number }[];
 }
+
+/// What a suggested index did to the plan, measured with the index actually there and then dropped
+/// again.
+export interface IndexTrialDto {
+  index: string;
+  created: string;
+  before: PlanNodeDto;
+  after: PlanNodeDto;
+  costBefore: number | null;
+  costAfter: number | null;
+  /// "cheaper by 96%, and it stopped scanning the table", "no real difference — this index is not
+  /// the answer".
+  verdict: string;
+  /// The index the trial could not remove again. Null is the normal case.
+  leftBehind: string | null;
+}
+
+/// Creates the index, asks for the plan again, drops it. Refused on a read-only connection and on
+/// one marked as production, because building an index takes locks and time on the real table.
+export const tryIndex = (conn: string, sql: string, ddl: string): Promise<IndexTrialDto> =>
+  fetch(`${base}/analyze/${conn}/try-index`, json("POST", { sql, ddl }))
+    .then(r => ok<IndexTrialDto>(r));
 
 export const analyzeQuery = (connectionId: string, sql: string, actual = false): Promise<AnalyzeResultDto> =>
   fetch(`${base}/query/analyze`, json("POST", { connectionId, sql, actual }))
@@ -634,6 +804,57 @@ export const previewRename = (conn: string, ref: string, newName: string):
   fetch(`${base}/ddl/${conn}/rename`, json("POST", { objectRef: ref, newName }))
     .then(r => ok<{ hash: string; script: string; dependencies: DependencyReportDto }>(r));
 
+/// What every object editor gets back: the statement, and the hash that runs it. Nothing has
+/// happened yet when this resolves.
+export interface ObjectScriptDto { hash: string; script: string; destructive: boolean }
+export interface DropScriptDto { hash: string; script: string; dependencies: DependencyReportDto }
+
+/// A view, written the way this engine spells "replace this definition".
+export const previewView = (conn: string, schema: string, name: string, select: string):
+  Promise<ObjectScriptDto> =>
+  fetch(`${base}/ddl/${conn}/view`, json("POST", { schema, name, select }))
+    .then(r => ok<ObjectScriptDto>(r));
+
+/// A procedure, function or trigger from its source. The engine decides whether that is
+/// CREATE OR REPLACE, CREATE OR ALTER, or a drop and a create.
+export const previewRoutine = (conn: string, schema: string, name: string, kind: string, body: string):
+  Promise<ObjectScriptDto> =>
+  fetch(`${base}/ddl/${conn}/routine`, json("POST", { schema, name, kind, body }))
+    .then(r => ok<ObjectScriptDto>(r));
+
+export interface SequenceInput {
+  schema: string; name: string; create: boolean;
+  start?: number | null; increment?: number | null;
+  minValue?: number | null; maxValue?: number | null;
+  cycle?: boolean; cache?: number | null; restartWith?: number | null;
+}
+
+export const previewSequence = (conn: string, input: SequenceInput): Promise<ObjectScriptDto> =>
+  fetch(`${base}/ddl/${conn}/sequence`, json("POST", input)).then(r => ok<ObjectScriptDto>(r));
+
+export const previewSchemaChange = (conn: string, name: string, drop: boolean, cascade = false):
+  Promise<ObjectScriptDto> =>
+  fetch(`${base}/ddl/${conn}/schema`, json("POST", { name, drop, cascade }))
+    .then(r => ok<ObjectScriptDto>(r));
+
+/// The description the database itself keeps — what another tool reading this database sees. The
+/// studio's own notes are the other half, and they need no rights at all.
+export const previewComment = (conn: string, ref: string, text: string | null):
+  Promise<ObjectScriptDto> =>
+  fetch(`${base}/ddl/${conn}/comment`, json("POST", { objectRef: ref, text }))
+    .then(r => ok<ObjectScriptDto>(r));
+
+/// A trigger stopped rather than dropped: the definition stays, the firing does not.
+export const previewTriggerState = (conn: string, ref: string, enabled: boolean):
+  Promise<ObjectScriptDto> =>
+  fetch(`${base}/ddl/${conn}/trigger`, json("POST", { objectRef: ref, enabled }))
+    .then(r => ok<ObjectScriptDto>(r));
+
+/// Dropping anything the tree shows, with whatever depends on it listed first.
+export const previewDrop = (conn: string, ref: string): Promise<DropScriptDto> =>
+  fetch(`${base}/ddl/${conn}/drop`, json("POST", { objectRef: ref }))
+    .then(r => ok<DropScriptDto>(r));
+
 // --- archives ----------------------------------------------------------------
 export interface ArchiveInfoDto {
   name: string;
@@ -672,6 +893,33 @@ export const saveArchive = (name: string, body: {
 }): Promise<ArchiveInfoDto> =>
   fetch(`${base}/archives/${encodeURIComponent(name)}`, json("POST", body))
     .then(r => ok<ArchiveInfoDto>(r));
+
+/// A statement's result, kept as a table — here, or in another connection.
+export interface ResultTableRequest {
+  connectionId: string;
+  sql: string;
+  table: string;
+  schema?: string;
+  targetConnectionId?: string;
+  maxRows?: number;
+}
+
+export interface ResultTablePlanDto {
+  schema: string;
+  table: string;
+  columns: { name: string; sourceType: string; targetType: string }[];
+  createSql: string;
+  /// True when both sides are the same engine, which is when the types are exactly the source's.
+  exactTypes: boolean;
+}
+
+export interface ResultTableOutcomeDto { table: string; rows: number; createSql: string }
+
+export const planResultTable = (body: ResultTableRequest): Promise<ResultTablePlanDto> =>
+  fetch(`${base}/result-table/plan`, json("POST", body)).then(r => ok<ResultTablePlanDto>(r));
+
+export const keepResultAsTable = (body: ResultTableRequest): Promise<ResultTableOutcomeDto> =>
+  fetch(`${base}/result-table`, json("POST", body)).then(r => ok<ResultTableOutcomeDto>(r));
 
 export const deleteArchive = (name: string): Promise<void> =>
   fetch(`${base}/archives/${encodeURIComponent(name)}`, { method: "DELETE" }).then(r => ok<void>(r));
@@ -736,6 +984,304 @@ export const killSession = (conn: string, id: string): Promise<void> =>
   fetch(`${base}/admin/sessions/${conn}/${encodeURIComponent(id)}/kill`, { method: "POST" })
     .then(r => ok<void>(r));
 
+export interface ConnectionPresetDto {
+  id: string; label: string; engine: string; template: string; description: string;
+  /// Opening it needs a person to sign in — the device-code flow — rather than the machine's identity.
+  interactive: boolean;
+}
+
+export const connectionPresets = (engine?: string): Promise<ConnectionPresetDto[]> =>
+  fetch(`${base}/connection-presets${engine ? `?engine=${encodeURIComponent(engine)}` : ""}`)
+    .then(r => ok<ConnectionPresetDto[]>(r));
+
+export interface EntraStatusDto {
+  /// none, starting, pending, signed-in, expired or failed. The token never leaves the server.
+  state: string;
+  userCode: string | null;
+  verificationUrl: string | null;
+  message: string | null;
+  expiresOn: string | null;
+  error: string | null;
+}
+
+export const entraSignIn = (conn: string, tenant?: string): Promise<EntraStatusDto> =>
+  fetch(`${base}/connections/${conn}/entra/signin${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`,
+    { method: "POST" }).then(r => ok<EntraStatusDto>(r));
+
+export const entraStatus = (conn: string): Promise<EntraStatusDto> =>
+  fetch(`${base}/connections/${conn}/entra`).then(r => ok<EntraStatusDto>(r));
+
+export const entraSignOut = (conn: string): Promise<void> =>
+  fetch(`${base}/connections/${conn}/entra`, { method: "DELETE" }).then(r => ok<void>(r));
+
+export interface ExportTemplateDto {
+  id: string; label: string; extension: string; contentType: string;
+  header: string | null; row: string; footer: string | null; separator: string;
+}
+
+export const exportTemplates = (): Promise<{ templates: ExportTemplateDto[]; error: string | null }> =>
+  fetch(`${base}/export/templates`)
+    .then(r => ok<{ templates: ExportTemplateDto[]; error: string | null }>(r));
+
+export const saveExportTemplate = (template: ExportTemplateDto): Promise<ExportTemplateDto> =>
+  fetch(`${base}/export/templates`, json("PUT", template)).then(r => ok<ExportTemplateDto>(r));
+
+export const deleteExportTemplate = (id: string): Promise<void> =>
+  fetch(`${base}/export/templates/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .then(r => ok<void>(r));
+
+export interface SchemaScopeDto {
+  /// Every schema the connection could read.
+  available: string[];
+  /// The ones this studio chose, empty meaning all of them.
+  chosen: string[];
+  /// Where the deployment fixed the scope, that list; then `editable` is false.
+  fixedByEnvironment: string[];
+  editable: boolean;
+  /// Whether the tree also shows what the engine keeps for itself — sys, pg_catalog, SYS.
+  systemObjects: boolean;
+}
+
+export const schemaScope = (conn: string): Promise<SchemaScopeDto> =>
+  fetch(`${base}/schema/${conn}/scope`).then(r => ok<SchemaScopeDto>(r));
+
+export const chooseSchemas = (conn: string, schemas: string[]): Promise<{ chosen: string[] }> =>
+  fetch(`${base}/schema/${conn}/scope`, json("PUT", schemas)).then(r => ok<{ chosen: string[] }>(r));
+
+export const showSystemObjects = (conn: string, show: boolean): Promise<{ systemObjects: boolean }> =>
+  fetch(`${base}/schema/${conn}/system?show=${show}`, { method: "PUT" })
+    .then(r => ok<{ systemObjects: boolean }>(r));
+
+export interface DataHitDto {
+  schema: string; table: string; column: string; dataType: string; matches: number;
+}
+export interface DataSearchDto {
+  hits: DataHitDto[];
+  tablesSearched: number;
+  tablesSkipped: number;
+  /// Tables that could not be searched, with the reason.
+  notes: string[];
+  truncated: boolean;
+}
+
+/// "Find this value in any table", server-side and type-aware.
+export const searchData = (
+  conn: string, value: string, options?: { schema?: string; exact?: boolean; maxTables?: number },
+): Promise<DataSearchDto> => {
+  const query = new URLSearchParams({ value });
+  if (options?.schema) query.set("schema", options.schema);
+  if (options?.exact) query.set("exact", "true");
+  if (options?.maxTables) query.set("maxTables", String(options.maxTables));
+
+  return fetch(`${base}/search/${conn}/data?${query}`).then(r => ok<DataSearchDto>(r));
+};
+
+export interface TableSizeDto {
+  schema: string; table: string; bytes: number; rows: number | null;
+}
+export interface TableGrowthDto {
+  schema: string; table: string;
+  firstBytes: number; lastBytes: number;
+  from: string; to: string;
+  rows: number | null;
+  delta: number;
+  /// Null for a table that started at nothing, where a percentage would be true and useless.
+  percent: number | null;
+  perDay: number;
+}
+export interface SizesDto {
+  available: boolean;
+  reason: string | null;
+  days?: number;
+  tables: TableSizeDto[];
+  growth: TableGrowthDto[];
+}
+
+/// How big every table is — and, once there are two samples, how much bigger than it was. Asking
+/// records a sample, so the history builds itself.
+export const tableSizes = (conn: string, days?: number): Promise<SizesDto> =>
+  fetch(`${base}/admin/sizes/${conn}${days ? `?days=${days}` : ""}`).then(r => ok<SizesDto>(r));
+
+export interface StatementStatsDto {
+  fingerprint: string;
+  example: string;
+  runs: number;
+  failures: number;
+  averageMs: number;
+  slowestMs: number;
+  fastestMs: number;
+  firstSeen: string;
+  lastSeen: string;
+  /// Recent runs against older ones, as a factor. Null where there is not enough history.
+  trend: number | null;
+}
+
+export const historyStats = (options?: { connectionId?: string; days?: number; top?: number }):
+  Promise<{ days: number; runs: number; statements: StatementStatsDto[] }> => {
+  const query = new URLSearchParams();
+  if (options?.connectionId) query.set("connectionId", options.connectionId);
+  if (options?.days) query.set("days", String(options.days));
+  if (options?.top) query.set("top", String(options.top));
+
+  return fetch(`${base}/history/stats?${query}`)
+    .then(r => ok<{ days: number; runs: number; statements: StatementStatsDto[] }>(r));
+};
+
+export interface ImportColumnDto { name: string; sourceType: string; targetType: string }
+
+export interface ImportPlanDto {
+  schema: string;
+  table: string;
+  columns: ImportColumnDto[];
+  /// The CREATE TABLE that will run, for reading before it does.
+  createSql: string;
+  /// Where the reader can say so without reading the whole file.
+  rows: number | null;
+  preview: (string | null)[][];
+}
+
+export interface ImportOutcomeDto { table: string; rows: number; createSql: string }
+
+/// A file becomes a table: `apply: false` plans it, `apply: true` creates and loads it.
+export const importFileAsTable = (conn: string, options: {
+  table: string;
+  schema?: string;
+  apply: boolean;
+  file?: File | null;
+  /// An object in a bucket, read where it is rather than downloaded first.
+  source?: { storageConnection: string; objectRef: string };
+}): Promise<ImportPlanDto | ImportOutcomeDto> => {
+  const query = new URLSearchParams({ table: options.table });
+  if (options.schema) query.set("schema", options.schema);
+  if (options.apply) query.set("apply", "true");
+
+  if (options.source) {
+    query.set("storageConnection", options.source.storageConnection);
+    query.set("ref", options.source.objectRef);
+
+    return fetch(`${base}/import/${conn}/new-table?${query}`, { method: "POST" })
+      .then(r => ok<ImportPlanDto | ImportOutcomeDto>(r));
+  }
+
+  const body = new FormData();
+  if (options.file) body.append("file", options.file);
+
+  return fetch(`${base}/import/${conn}/new-table?${query}`, { method: "POST", body })
+    .then(r => ok<ImportPlanDto | ImportOutcomeDto>(r));
+};
+
+export interface JsonPathDto {
+  path: string;
+  /// Every type seen at this path. More than one is where a flatten breaks.
+  types: string[];
+  present: number;
+  example: string | null;
+  /// The SQL that reads this path on this engine.
+  expression: string;
+}
+export interface JsonShapeDto {
+  sampled: number;
+  parsed: number;
+  note: string | null;
+  paths: JsonPathDto[];
+  /// The SELECT that turns the paths into columns.
+  flatten: string;
+}
+
+export const jsonShape = (conn: string, ref: string, column: string,
+  sample?: number): Promise<JsonShapeDto> =>
+  fetch(`${base}/data/${conn}/json?${refQuery(ref, new URLSearchParams({
+    column, ...(sample ? { sample: String(sample) } : {}),
+  }))}`).then(r => ok<JsonShapeDto>(r));
+
+export interface SqlFindingDto {
+  id: string;
+  /// warning for what is probably a mistake, note for what is merely worth knowing.
+  severity: string;
+  message: string;
+  statement: number;
+  line: number;
+  excerpt: string;
+}
+
+/// A read of the SQL before it runs. It warns; it never refuses.
+export const inspectSql = (conn: string, sql: string): Promise<SqlFindingDto[]> =>
+  fetch(`${base}/query/inspect`, json("POST", { connectionId: conn, sql }))
+    .then(r => ok<SqlFindingDto[]>(r));
+
+export interface CapturedStatementDto {
+  text: string; samples: number; maxDurationMs: number;
+  firstSeen: string; lastSeen: string;
+  sessions: string[]; users: string[]; databases: string[]; blocked: boolean;
+}
+export interface CaptureDto {
+  /// none, running, done, stopped or failed.
+  state: string;
+  startedAt: string | null;
+  seconds: number;
+  secondsLeft: number;
+  samples: number;
+  statements: CapturedStatementDto[];
+  error: string | null;
+}
+
+export const startCapture = (conn: string, seconds: number): Promise<CaptureDto> =>
+  fetch(`${base}/admin/capture/${conn}?seconds=${seconds}`, { method: "POST" })
+    .then(r => ok<CaptureDto>(r));
+
+export const captureStatus = (conn: string): Promise<CaptureDto> =>
+  fetch(`${base}/admin/capture/${conn}`).then(r => ok<CaptureDto>(r));
+
+export const stopCapture = (conn: string): Promise<CaptureDto> =>
+  fetch(`${base}/admin/capture/${conn}`, { method: "DELETE" }).then(r => ok<CaptureDto>(r));
+
+export interface CaptureAdviceDto {
+  table: string;
+  message: string;
+  /// The statement to run, where the advice is one.
+  sql: string | null;
+  statements: number;
+  samples: number;
+  slowestMs: number;
+  example: string;
+}
+
+/// What the captured minute suggests: the capture and the index advisor together.
+export const captureAdvice = (conn: string):
+  Promise<{ state: string; reason: string | null; advice: CaptureAdviceDto[] }> =>
+  fetch(`${base}/admin/capture/${conn}/advice`)
+    .then(r => ok<{ state: string; reason: string | null; advice: CaptureAdviceDto[] }>(r));
+
+export interface JobDto {
+  id: string; name: string; enabled: boolean; schedule: string;
+  lastRun: string | null; lastOutcome: string | null; nextRun: string | null;
+  command: string | null;
+}
+export interface JobRunDto {
+  started: string | null; finished: string | null; outcome: string;
+  durationMs: number | null; message: string | null;
+}
+export interface JobsDto {
+  available: boolean;
+  /// What this engine calls its scheduler: SQL Server Agent, pg_cron, events.
+  scheduler: string | null;
+  reason: string | null;
+  jobs: JobDto[];
+  actions: { id: string; label: string; destructive: boolean }[];
+}
+
+export const listJobs = (conn: string): Promise<JobsDto> =>
+  fetch(`${base}/admin/jobs/${conn}`).then(r => ok<JobsDto>(r));
+
+export const jobHistory = (conn: string, id: string): Promise<JobRunDto[]> =>
+  fetch(`${base}/admin/jobs/${conn}/history?id=${encodeURIComponent(id)}`)
+    .then(r => ok<JobRunDto[]>(r));
+
+/// Changing a job comes back as SQL: it goes through the editor's run like every other change.
+export const jobStatement = (conn: string, id: string, action: string): Promise<{ sql: string }> =>
+  fetch(`${base}/admin/jobs/${conn}/statement`, json("POST", { id, action }))
+    .then(r => ok<{ sql: string }>(r));
+
 export const listDatabases = (conn: string): Promise<DatabaseDto[]> =>
   fetch(`${base}/admin/databases/${conn}`).then(r => ok<DatabaseDto[]>(r));
 
@@ -746,18 +1292,137 @@ export const dropDatabase = (conn: string, name: string): Promise<void> =>
   fetch(`${base}/admin/databases/${conn}/${encodeURIComponent(name)}`, { method: "DELETE" })
     .then(r => ok<void>(r));
 
-export const listUsers = (conn: string): Promise<string[]> =>
-  fetch(`${base}/admin/users/${conn}`).then(r => ok<string[]>(r));
+/// One account or role the server knows. A role is a bag of rights nobody signs in as; in
+/// PostgreSQL that is the only difference between the two.
+export interface DbPrincipalDto {
+  name: string;
+  isRole: boolean;
+  canLogin: boolean;
+  superuser: boolean;
+  validUntil: string | null;
+  locked: boolean;
+  /// The roles this one is in — the answer to "why can they read that".
+  memberOf: string[];
+}
+
+export interface PrivilegeGrantDto { object: string; privilege: string; grantable: boolean }
+
+export const listUsers = (conn: string): Promise<DbPrincipalDto[]> =>
+  fetch(`${base}/admin/users/${conn}`).then(r => ok<DbPrincipalDto[]>(r));
+
+/// What one account or role may do directly. Its roles are in the list itself.
+export const userGrants = (conn: string, user: string): Promise<PrivilegeGrantDto[]> =>
+  fetch(`${base}/admin/users/${conn}/grants?user=${encodeURIComponent(user)}`)
+    .then(r => ok<PrivilegeGrantDto[]>(r));
+
+export type SecurityAction =
+  "create" | "drop" | "password" | "login" | "grant" | "revoke" | "grant-role" | "revoke-role";
 
 export const previewUserChange = (conn: string, body: {
-  user: string; password?: string; privilege?: string; target?: string;
-}): Promise<{ hash: string; script: string }> =>
+  user: string; action?: SecurityAction; password?: string; privilege?: string; target?: string;
+  role?: boolean; canLogin?: boolean; member?: string;
+}): Promise<{ hash: string; script: string; destructive?: boolean }> =>
   fetch(`${base}/admin/users/${conn}/preview`, json("POST", body))
-    .then(r => ok<{ hash: string; script: string }>(r));
+    .then(r => ok<{ hash: string; script: string; destructive?: boolean }>(r));
 
 export const applyUserChange = (conn: string, hash: string): Promise<{ executed: string }> =>
   fetch(`${base}/admin/users/${conn}/apply`, json("POST", { hash }))
     .then(r => ok<{ executed: string }>(r));
+
+/// What moved since the schema was last written down.
+export interface SchemaDriftDto {
+  before: string | null;
+  after: string;
+  summary: string;
+  added: string[];
+  removed: string[];
+  changed: string[];
+}
+
+export const schemaDrift = (conn: string): Promise<{ configured: boolean; drift: SchemaDriftDto | null }> =>
+  fetch(`${base}/schema/${conn}/drift`)
+    .then(r => ok<{ configured: boolean; drift: SchemaDriftDto | null }>(r));
+
+/// The statements that would carry another database from the snapshot's schema to this one, plus
+/// what the studio saw and will not write by itself.
+export interface DriftScriptDto {
+  before: string | null;
+  script: string;
+  destructive: boolean;
+  needsAPerson: string[];
+  statements: number;
+}
+
+export const driftScript = (conn: string): Promise<DriftScriptDto> =>
+  fetch(`${base}/schema/${conn}/drift/script`).then(r => ok<DriftScriptDto>(r));
+
+export const takeSnapshot = (): Promise<{ moved: number }> =>
+  fetch(`${base}/schema/snapshot`, json("POST", {})).then(r => ok<{ moved: number }>(r));
+
+/// One version of a row, as the database kept it.
+export interface RowVersionDto {
+  from: string | null;
+  to: string | null;
+  values: unknown[];
+  /// Which columns differ from the version before this one.
+  changed: string[];
+}
+
+export interface RowHistoryDto {
+  supported: boolean;
+  columns: DataColumnDto[];
+  versions: RowVersionDto[];
+  note: string | null;
+}
+
+/// Whether this table keeps a history the database itself wrote. Asked once when a data tab opens,
+/// so a button that cannot work is never drawn.
+export const historyAvailable = (conn: string, ref: string):
+  Promise<{ supported: boolean; note: string | null }> =>
+  fetch(`${base}/data/${conn}/history/available?${refQuery(ref)}`)
+    .then(r => ok<{ supported: boolean; note: string | null }>(r));
+
+export const rowHistory = (conn: string, ref: string, key: Record<string, string>):
+  Promise<RowHistoryDto> => {
+  // One `key=column:value` per key column: which row is being followed through time.
+  const params = new URLSearchParams({ ref });
+  for (const [column, value] of Object.entries(key)) params.append("key", `${column}:${value}`);
+
+  return fetch(`${base}/data/${conn}/history?${params}`).then(r => ok<RowHistoryDto>(r));
+};
+
+/// One box on a dashboard: a statement, and what to draw with what comes back.
+export interface DashboardTileDto {
+  title: string;
+  connectionId: string;
+  sql: string;
+  /// "number" shows the first cell, "table" the rows, "chart" a bar per row.
+  view: string;
+  width: number;
+}
+
+export interface DashboardDto {
+  id: string;
+  name: string;
+  tiles: DashboardTileDto[];
+  /// How often the tiles run themselves. 0 means only when asked.
+  refreshSeconds: number;
+  updatedAt: string;
+  /// True for one the deployment ships: shown here, changed where it is written.
+  fromFile?: boolean;
+}
+
+export const listDashboards = (): Promise<{ available: boolean; dashboards: DashboardDto[] }> =>
+  fetch(`${base}/dashboards`).then(r => ok<{ available: boolean; dashboards: DashboardDto[] }>(r));
+
+export const saveDashboard = (id: string, body: {
+  name: string; tiles: DashboardTileDto[]; refreshSeconds: number;
+}): Promise<DashboardDto> =>
+  fetch(id ? `${base}/dashboards/${id}` : `${base}/dashboards`, json(id ? "PUT" : "POST", body))
+    .then(r => ok<DashboardDto>(r));
+
+export const deleteDashboard = (id: string): Promise<void> =>
+  fetch(`${base}/dashboards/${id}`, { method: "DELETE" }).then(r => ok<void>(r));
 
 export const serverLog = (conn: string, lines = 200): Promise<ServerLogDto> =>
   fetch(`${base}/admin/logs/${conn}?lines=${lines}`).then(r => ok<ServerLogDto>(r));
@@ -846,6 +1511,30 @@ export const compareData = (body: {
   keyColumns: string[]; maxRows?: number;
 }): Promise<DataComparisonDto> =>
   fetch(`${base}/compare/data`, json("POST", body)).then(r => ok<DataComparisonDto>(r));
+
+// --- what the deployment ships -------------------------------------------------
+/// Snippets a stack ships: everybody who opens this studio has them, and nobody can change them
+/// here. A snippet of one's own with the same prefix wins for that person.
+export const deploymentSnippets = (): Promise<
+  { prefix: string; label: string; body: string; description: string }[]> =>
+  fetch(`${base}/deployment/snippets`)
+    .then(r => ok<{ prefix: string; label: string; body: string; description: string }[]>(r));
+
+/// The preferences a studio starts with, before anybody changed one.
+export const deploymentPreferences = (): Promise<{
+  configured: boolean;
+  preferences: Partial<{
+    pageSize: number; historySnapshots: boolean; snapshotRows: number; inspectBeforeRun: boolean;
+    notifyAfterSeconds: number; timeZone: string;
+  }> | null;
+}> =>
+  fetch(`${base}/deployment/preferences`).then(r => ok<{
+    configured: boolean;
+    preferences: Partial<{
+      pageSize: number; historySnapshots: boolean; snapshotRows: number; inspectBeforeRun: boolean;
+      notifyAfterSeconds: number; timeZone: string;
+    }> | null;
+  }>(r));
 
 // --- workspace items (snippets, layout presets) --------------------------------
 export const loadWorkspaceItem = <T>(key: string): Promise<T | null> =>
@@ -1012,3 +1701,161 @@ export const redisPublish = (conn: string, channel: string, message: string):
 /// The subscription is server-sent events, so the browser's own EventSource carries it.
 export const redisSubscribeUrl = (conn: string, channels: string) =>
   `${base}/redis/${conn}/subscribe?channels=${encodeURIComponent(channels)}`;
+
+/// PostgreSQL's own message bus. Same shape as the Redis subscription, because it is the same
+/// question: is anything actually coming through?
+export const notifyListenUrl = (conn: string, channels: string) =>
+  `${base}/notify/${conn}/listen?channels=${encodeURIComponent(channels)}`;
+
+export const sendNotification = (conn: string, channel: string, payload: string): Promise<void> =>
+  fetch(`${base}/notify/${conn}/send`, json("POST", { channel, payload })).then(r => ok<void>(r));
+
+export interface StoragePreviewDto {
+  name: string;
+  key: string;
+  contentType: string | null;
+  size: number;
+  modified: string | null;
+  etag: string | null;
+  storageClass: string | null;
+  /// Whether a reader here understands the file, and the data tab can therefore open it.
+  queryable: boolean;
+  /// What a query selects from — `read_parquet('s3://…')` — or null where nothing reads it.
+  from: string | null;
+  /// The provider's own URI for this object, for copying.
+  uri: string;
+  truncated: boolean;
+  text: string | null;
+  binary: boolean;
+}
+
+export const previewObject = (conn: string, ref: string): Promise<StoragePreviewDto> =>
+  fetch(`${base}/storage/${conn}/preview?${refQuery(ref)}`).then(r => ok<StoragePreviewDto>(r));
+
+/// A download and an image both need a URL rather than a promise: one goes to a link, the other to
+/// an `img` tag.
+export const objectUrl = (conn: string, ref: string) =>
+  `${base}/storage/${conn}/download?${refQuery(ref)}`;
+
+/// A whole prefix as one zip. Streamed, so the response has no length and the limits are written
+/// into the archive itself where they had to stop the walk.
+export const archiveUrl = (conn: string, ref: string) =>
+  `${base}/storage/${conn}/archive?${refQuery(ref)}`;
+
+export const uploadObject = (conn: string, ref: string, file: File): Promise<{ key: string }> =>
+  fetch(`${base}/storage/${conn}/upload?${refQuery(ref, new URLSearchParams({ name: file.name }))}`,
+    { method: "POST", headers: { "content-type": file.type || "application/octet-stream" }, body: file })
+    .then(r => ok<{ key: string }>(r));
+
+export const deleteObject = (conn: string, ref: string): Promise<{ key: string }> =>
+  fetch(`${base}/storage/${conn}?${refQuery(ref)}`, { method: "DELETE" })
+    .then(r => ok<{ key: string }>(r));
+
+/// One rule somebody wrote about their data. The kind decides what `argument` means: a range is
+/// `0..100`, a reference `other_table.column`, a freshness `24h`, an expression the condition a bad
+/// row satisfies.
+export interface QualityRuleDto {
+  id: string;
+  connectionId: string;
+  schema: string;
+  table: string;
+  column: string;
+  kind: "NotNull" | "Unique" | "Range" | "Referential" | "Freshness" | "Expression";
+  argument: string | null;
+  message: string | null;
+  enabled: boolean;
+  /// True for a rule the deployment ships in WDS_QUALITY_FILE: it runs, and the studio cannot change
+  /// or delete it.
+  fromFile?: boolean;
+}
+
+/// What one rule has counted over time.
+export interface QualityHistoryDto {
+  ruleId: string;
+  table: string | null;
+  column: string | null;
+  kind: string | null;
+  runs: number;
+  first: number;
+  last: number;
+  worst: number;
+  /// unchanged, fixed, new, "worse by 7", "better by 7".
+  trend: string;
+  points: { at: string; violations: number; failed: boolean }[];
+}
+export interface QualityResultDto {
+  rule: QualityRuleDto;
+  violations: number;
+  statement: string;
+  ranAt: string;
+  error: string | null;
+}
+
+export const qualityRules = (conn: string): Promise<QualityRuleDto[]> =>
+  fetch(`${base}/quality/${conn}`).then(r => ok<QualityRuleDto[]>(r));
+
+export const saveQualityRule = (conn: string, rule: QualityRuleDto): Promise<QualityRuleDto> =>
+  fetch(`${base}/quality/${conn}`, json("PUT", rule)).then(r => ok<QualityRuleDto>(r));
+
+export const deleteQualityRule = (conn: string, id: string): Promise<void> =>
+  fetch(`${base}/quality/${conn}/${id}`, { method: "DELETE" }).then(r => ok<void>(r));
+
+/// What each rule has counted, over time: a rule's answer is a count, and a count over time is the
+/// difference between "twelve rows are wrong" and "it is getting worse".
+export const qualityHistory = (conn: string, days?: number):
+  Promise<{ days: number; rules: QualityHistoryDto[] }> =>
+  fetch(`${base}/quality/${conn}/history${days ? `?days=${days}` : ""}`)
+    .then(r => ok<{ days: number; rules: QualityHistoryDto[] }>(r));
+
+/// Runs every enabled rule and answers with what each one counted.
+export const runQualityRules = (conn: string):
+  Promise<{ ran: number; failing: number; results: QualityResultDto[] }> =>
+  fetch(`${base}/quality/${conn}/run`, { method: "POST" })
+    .then(r => ok<{ ran: number; failing: number; results: QualityResultDto[] }>(r));
+
+/// One line of the audit trail: who asked for what, and what came of it.
+export interface AuditEntryDto {
+  id: number;
+  at: string;
+  user: string;
+  role: string;
+  connectionId: string;
+  action: string;
+  detail: string;
+  status: number;
+  elapsedMs: number;
+  address: string;
+}
+
+/// Who did what through this studio. Admin-only, like the rest of /api/admin.
+export const auditTrail = (query: { user?: string; conn?: string; search?: string; limit?: number }):
+  Promise<{ enabled: boolean; entries: AuditEntryDto[] }> => {
+  const params = new URLSearchParams();
+  if (query.user) params.set("user", query.user);
+  if (query.conn) params.set("conn", query.conn);
+  if (query.search) params.set("search", query.search);
+  if (query.limit) params.set("limit", String(query.limit));
+
+  return fetch(`${base}/admin/audit?${params}`)
+    .then(r => ok<{ enabled: boolean; entries: AuditEntryDto[] }>(r));
+};
+
+/// One table in a development subset.
+export interface SubsetTableDto {
+  schema: string; name: string; rows: number; statement: string;
+}
+export interface SubsetResultDto {
+  script: string;
+  tables: SubsetTableDto[];
+  rows: number;
+  /// What the subset could not do, in its own words: a multi-column foreign key it left out, a
+  /// cycle it had to break, a table it stopped at.
+  notes: string[];
+}
+
+/// A small, loadable, anonymised copy of a real database: these rows and the rows they point at.
+export const buildSubset = (conn: string, request: {
+  table: string; schema?: string; where?: string; rows?: number;
+  includeSchema?: boolean; anonymise?: boolean; depth?: number;
+}): Promise<SubsetResultDto> =>
+  fetch(`${base}/export/subset/${conn}`, json("POST", request)).then(r => ok<SubsetResultDto>(r));

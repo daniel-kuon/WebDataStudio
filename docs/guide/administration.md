@@ -11,6 +11,140 @@ destructive ones are marked and ask before they run.
 The endpoint takes a command id from that catalogue, never raw SQL, and quotes the target through
 the dialect — so this panel cannot become a second, unlogged query console.
 
+## Jobs
+
+What the server itself runs on a schedule, whatever it is called there: SQL Server Agent jobs,
+pg_cron entries, MySQL events. One tab, because the question is the same — what runs, when, and did
+it work. Each row carries the schedule, the outcome of the last run and the next run; clicking a job
+opens its history.
+
+Reading is free. Changing is not: **Enable**, **Disable** and **Run now** produce a statement in a
+query tab, which then goes through the same run as anything typed by hand. pg_cron and MySQL have no
+"run now" and say so rather than executing a job body behind your back.
+
+An empty list is not a failure — pg_cron may not be installed, the Agent service may be off, the
+event scheduler may be disabled — and the tab says which scheduler it looked in. An engine with no
+scheduler of its own says that instead.
+
+## Capture
+
+"What runs on this server in the next minute." Pick a window, press **Capture**, and the studio reads
+the server's own list of what it is doing once a second, grouping what it sees by statement with the
+longest first — how often it was seen, who ran it, whether it was blocked.
+
+This is sampling, not tracing: a statement that starts and finishes between two samples is not seen,
+and the tab says so. Extended Events and its equivalents are the real answer to this question and
+need permissions a studio has no business arranging. A capture can be stopped early and keeps what it
+saw; one started before the panel was opened is picked up again.
+
+**What should I change?** — asked once the capture has stopped, because advice about a minute that is
+still being watched would keep moving. The twenty slowest statements are read by the same index
+advisor the health report uses, and the suggestions are aggregated per table: how many statements
+would benefit, how slow the slowest of them was, and the `CREATE INDEX` itself, which opens in a query
+tab rather than running from here. Nothing to suggest is an answer too, and it says so.
+
+## Data quality
+
+The health report reads the catalogue: a table without a primary key, an index nobody uses. It cannot
+say that a third of yesterday's orders have no customer, because that is not in the catalogue — it is
+in the rows. The **Data quality** tab is the other half.
+
+A rule is one counting query. Pick a table, a column and a kind:
+
+| Rule | What it counts | Written as |
+|---|---|---|
+| Has a value | rows where the column is null | — |
+| No duplicates | the extra rows in every group that appears more than once | — |
+| Between two numbers | values outside the range | `0..100` |
+| Points at a row that exists | values with no matching row in another table | `customers.id`, or `sales.customers.id` |
+| Newest value is recent | one, if the newest value is older than that | `24h`, `30m`, `7d` |
+| My own condition | rows that satisfy it | `total < 0 OR status = ''` |
+
+The arguments are **parsed, not pasted**: a range is two numbers, a reference is a table and a column,
+an interval is a number and a unit. An expression is the one exception — it is the person's own SQL
+and is treated the way a query tab treats what somebody typed.
+
+Two decisions worth knowing. `NULL` is not a broken reference: "no customer yet" is a different rule,
+and *Has a value* is the one that catches it. And a rule that cannot be checked — a column that was
+renamed — reports why rather than stopping the rules after it.
+
+**Run now** runs every enabled rule and shows what each one counted, failing first, with the counting
+statement one click away in a query tab. A rule can be switched off without being deleted.
+
+![Rules about the data](../assets/screenshots/quality-dark.png)
+
+A failing rule also becomes a **health finding**, which means the [alert webhook](#alerts) carries it:
+a rule written once is watched from then on, without anybody opening the studio.
+
+**Which way it is going.** Every run is a measurement — one number per rule — so the *Since* column
+says `worse by 7`, `better by 3`, `fixed` or `unchanged` rather than only what today's count is. A
+mean over a month says nothing about the direction, which is the only thing anybody asks. The runs
+are kept in the workspace database with the rest of the studio's own state.
+
+**Rules the deployment owns.** Rules written here are workspace state; rules that belong to a
+deployment belong in the repository with the seed scripts and the export templates. `WDS_QUALITY_FILE`
+points at a JSON file, or a folder of them:
+
+```json
+[
+  {
+    "connection": "SHOP",
+    "schema": "public",
+    "table": "invoices",
+    "column": "customer_id",
+    "kind": "NotNull",
+    "message": "every invoice needs a customer"
+  }
+]
+```
+
+Each entry names its connection the way a person does — by name — and the studio resolves it. Those
+rules are marked **shipped**: they run and they report, and the studio cannot change or delete them.
+A rule for a connection this studio does not have is skipped with a line in the log rather than
+breaking the others, and a file that cannot be read leaves the rules somebody wrote here alone.
+
+From an Aspire app host that is `WithQualityRules("quality")`.
+
+## Growth
+
+The databases tab draws the sizes as a treemap, and underneath it the same tables ordered by *how much
+they grew*. The sizes are sampled whenever somebody looks, so the history builds itself rather than
+needing a decision to start it; the first look is a size, the second one is a growth.
+
+Biggest absolute change first, with the percentage where it means anything — a table that started at
+nothing has no meaningful percentage — and a per-day rate so a week and a month can be compared. A
+table that shrank is marked differently from one that grew, because both are answers.
+
+## Audit
+
+Who did what through this studio: one line per request that changed something or took data out of the
+building, with who asked, against which connection, and what came of it. Filter by person, by
+connection, or by what happened — the search reads the statement as well as the action, so "who
+dropped that" is a table name in the box.
+
+![Who did what](../assets/screenshots/audit-dark.png)
+
+It is described in full, with its variables, in [Safety](safety.md#who-did-what).
+
+## LISTEN / NOTIFY
+
+**Tools → Notifications** watches PostgreSQL's own message bus: the channel a job queue announces
+itself on, the one a trigger fires, the one a cache listens to. Name the channels, press *Listen*,
+and what arrives is shown as it arrives — with the time, the channel, the payload, and the backend
+process that sent it, which is the answer to "was that me, or the application?"
+
+**Send** publishes one, for trying the other end without writing a client. A read-only connection
+listens and does not send.
+
+Two things worth knowing:
+
+- A channel is an **identifier**, not a string. `MixedCase` stays `MixedCase` rather than being
+  folded to lower case, so it matches an application that spells it that way.
+- Nothing is stored. A notification that arrives while nobody is listening is gone — that is
+  PostgreSQL's design, not the studio's.
+
+Redis has the same idea under another name, in its own panel.
+
 ## Sessions
 
 The session list shows who is connected, what they are running, how long it has taken and who is
@@ -21,10 +155,34 @@ blocking whom. A session can be terminated after a confirmation that shows its c
 List, create and drop databases on the engines that have more than one. Dropping asks you to type
 the name.
 
-## Users and privileges
+## Accounts and roles
 
-List the users, and create one or grant a privilege through the same preview-then-apply handshake
-the rest of the app uses: the statement is shown, and only then does it run.
+The **Accounts** tab lists what the server knows: its accounts, its roles, and the difference between
+them. In PostgreSQL there is only one kind of thing and the difference is whether it may sign in;
+the other engines keep two, and the tab says which is which either way.
+
+Per row: whether it is an account or a role, whether it is a superuser, whether it may sign in at
+all, when it expires, and **which roles it is in** — that last one is usually the answer to "why can
+they read that". Clicking a row shows what was granted to it **directly**; anything else it can do
+comes from its roles, and the panel says so rather than leaving a blank.
+
+What can be changed, each through the statement shown first:
+
+| | What it writes |
+|---|---|
+| New account…, New role… | `CREATE ROLE … LOGIN`, `CREATE ROLE … NOLOGIN`, `CREATE USER`, `CREATE LOGIN` — per engine |
+| New password… | `ALTER ROLE … PASSWORD`, `ALTER USER … IDENTIFIED BY`, `ALTER LOGIN … WITH PASSWORD` |
+| Stop it signing in… | `NOLOGIN`, `ACCOUNT LOCK`, `DISABLE` — the cheapest way to stop an account without losing what it may do, and the way back |
+| Put in a role…, Take out of a role… | `GRANT role TO member`, and `ALTER ROLE … ADD MEMBER` on SQL Server |
+| Grant a privilege…, Take a privilege back… | `GRANT`/`REVOKE`, on a table or on something like `ALL TABLES IN SCHEMA public` |
+| Drop… | `DROP ROLE`, `DROP USER`, `DROP LOGIN` |
+
+Two things this deliberately does not do. It never runs anything without showing the statement, and
+the statement is not written to the [audit trail](#audit) when it carries a password — what happened
+is recorded, the password is not. And listing accounts is itself a privilege: a connection without
+it gets an empty list with a line saying why, rather than an error nobody can act on.
+
+MongoDB, Redis, SQLite and DuckDB have no accounts this panel can manage, and say so.
 
 ## Server log
 
@@ -120,6 +278,12 @@ recommendation nobody can act on is a recommendation nobody acts on.
 
 The studio runs the analysis behind its health report on a timer and posts what is **new** to a
 webhook, so somebody hears about a missing index without opening the studio first.
+
+Half the value of a message is the way back to the thing it is about, so with `WDS_PUBLIC_URL` set
+every message carries a link: the connection, and the object where the finding's own fix names one —
+read out of that statement rather than out of the title, because "events has no primary key" ends in a
+word that is not a table. Without that variable there are no links: a container cannot know its own
+public address, and a guessed hostname is worse than none.
 
 | Variable | Meaning |
 |---|---|

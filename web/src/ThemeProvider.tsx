@@ -6,6 +6,8 @@ import { Notifications } from "@mantine/notifications";
 import "@mantine/notifications/styles.css";
 import "@mantine/spotlight/styles.css";
 import { THEMES, DEFAULT_THEME, THEME_KEY, getTheme, type AppTheme } from "./themes";
+import { onShell } from "./shell/bus";
+import { me } from "./api";
 
 interface ThemeCtx {
   themeId: string;
@@ -21,6 +23,26 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
   const setThemeId = useCallback((id: string) => { localStorage.setItem(THEME_KEY, id); setThemeIdState(id); }, []);
   const current = getTheme(themeId);
 
+  // A deployment can say which theme to start in (WDS_THEME, or WithTheme in Aspire). It is a
+  // starting point, not a lock: a person's own choice lives in localStorage and wins, and this
+  // never writes there — so raising the deployment's default later still reaches everybody who
+  // never picked one.
+  useEffect(() => {
+    if (localStorage.getItem(THEME_KEY)) return;
+
+    let cancelled = false;
+
+    me().then(state => {
+      const wanted = state.theme?.trim();
+      if (cancelled || !wanted || localStorage.getItem(THEME_KEY)) return;
+
+      if (THEMES.some(theme => theme.id === wanted)) setThemeIdState(wanted);
+      else console.warn(`WDS_THEME is "${wanted}", which is not one of this studio's themes`);
+    }).catch(() => {});
+
+    return () => { cancelled = true; };
+  }, []);
+
   // The command palette cycles themes without knowing the list; this is the one place that does.
   useEffect(() => {
     const cycle = () => setThemeIdState(id => {
@@ -30,8 +52,7 @@ export function AppThemeProvider({ children }: { children: ReactNode }) {
       return next;
     });
 
-    document.addEventListener("wds:cycle-theme", cycle);
-    return () => document.removeEventListener("wds:cycle-theme", cycle);
+    return onShell("cycle-theme", cycle);
   }, []);
 
   return (

@@ -21,6 +21,51 @@ The list comes from the same cached walk the editor's completion and `Ctrl+Shift
 first search on a connection costs one pass over its schema and later ones are instant. The refresh
 button drops that cache, which is what to press after somebody else changed the schema.
 
+## Finding a value rather than a table
+
+The filter box finds objects. **Find data** — the magnifier in the explorer's toolbar — finds a
+value: "which table has 4711 in it", answered on the server, one query per table and therefore one
+scan each.
+
+![Find data](../assets/screenshots/datasearch-dark.png)
+
+It is type-aware, which is what keeps it quick: a number is compared against numeric columns as a
+number and looked for inside text, a date against dates, and a column that could not hold the value at
+all — a `bytea`, a geometry, an image — is never cast to text. Text is matched without case on every
+engine, so the same search finds the same rows whichever connection it runs on.
+
+The result says where the value is, in which column, and how many rows carry it, with the most
+matches first. Clicking a hit opens that table already filtered on the column that matched. The answer
+also says how many tables were searched, how many were skipped and why, and whether it stopped at the
+table limit — a search that quietly gave up would be worse than one that says so.
+
+## Only the schemas you work in
+
+A server with five thousand tables makes every studio pay for all of them: the tree's first level, the
+completion cache, the object search and the schema snapshot each walk what they are given.
+**Properties…** on a connection has a **Schemas read** picker for that — name two, and nothing else is
+read. Empty means everything, which stays the default.
+
+A deployment can fix it instead with `WDS_CONN_<NAME>_SCHEMAS=public,sales`; the picker then reports
+that rather than pretending to be editable. Only schemas and databases are filtered — a bucket, a key
+space or a server-level folder passes through, because a schema scope that emptied the tree on another
+engine would be a bug.
+
+## The schemas the engine keeps for itself
+
+Every engine has schemas nobody in your database wrote: `sys`, `INFORMATION_SCHEMA` and a schema for
+each of the ten fixed database roles — `db_owner`, `db_datareader`, `db_denydatawriter` — on SQL
+Server, `pg_catalog`, `information_schema` and `pg_toast` on PostgreSQL, `mysql`, `sys` and
+`performance_schema` on MySQL, `SYS`, `SYSTEM` and the rest of the maintained users on Oracle,
+`system` on ClickHouse, `admin`, `local` and `config` on MongoDB, the `sqlite_%` tables on SQLite.
+The role schemas in particular are empty in nearly every database, so eleven of them in the tree buy
+nothing.
+
+The tree leaves all of it out. **Properties…** on a connection has **Show system schemas and their
+objects** for the day you need to read a catalogue view: it is per connection, off by default, and
+the objects inside those schemas come with it. A schema scope still applies on top — where somebody
+named the schemas they work in, `sys` is not one of them.
+
 ## What the tree shows
 
 Under a connection PostgreSQL keeps more than its schemas, and the tree lists that next to them:
@@ -36,6 +81,20 @@ Under a connection PostgreSQL keeps more than its schemas, and the tree lists th
 They are read-only listings — the studio names what is there rather than offering to change it. The
 other engines show their schemas as before; a folder they have no catalogue for is left out rather
 than shown empty.
+
+## Is this server still there?
+
+A dot in front of every connection says what the studio knows about it. Grey for "nobody has asked
+yet", green for a server that answered, red for one that did not — hover it for how long the answer
+took, or for what went wrong when it did not come.
+
+It is not a poll. A studio with ten connections would open ten of them, some through an SSH tunnel,
+for a row of dots nobody was looking at. Instead it asks once when a connection is expanded — the
+moment somebody shows interest in it — and again whenever the dot is clicked.
+
+The reading is a real round trip, not "a pooled connection object exists": the smallest statement
+the engine has, timed. A green dot with a yellow ring means the server answered and took longer
+than a quarter of a second about it.
 
 ## Privileges for a whole schema
 
@@ -58,6 +117,97 @@ the view readable while it rebuilds and needs a unique index on it; plain is fas
 Both come back as statements from the server, which knows how the engine spells it — Oracle's is
 `DBMS_MVIEW.REFRESH` — and refuses to build one for an object that is not a materialised view.
 
+## A data dictionary
+
+**Data dictionary…** in a connection's context menu writes the document somebody asks for when they
+join the team: one Markdown file that says what is in this database.
+
+- An overview table first — every table with its row count, its size and what it is for.
+- Then each one in full: columns with their types, nullability, defaults and comments; what it
+  points at; its indexes.
+- And the **notes** people left on objects here. That is the part that was never derivable from the
+  schema in the first place, which is exactly why it belongs in the document.
+
+Copy it, or download it as a `.md`. Describing a table costs several round trips, so the document
+stops at two hundred of them and says how many it left out rather than pretending that was all.
+
+## Notes on an object
+
+A database has `COMMENT ON`, which needs a DDL right and a migration — so what somebody learns about a
+table ends up in a chat message and is gone by Friday. The **Notes** tab is the studio's own note next
+to the object: a name, a date and a sentence, kept in the workspace database with the query history.
+
+Every kind of object has the tab, not only the ones with rows: a function is exactly the thing
+somebody needs a sentence about. Notes are searchable across every connection, which is the answer to
+"somebody wrote something about this once".
+
+## What a table actually holds
+
+The **Profile** tab counts it. One statement per look: how many rows, how many of them have a value
+in each column, how many different values, the smallest and the largest. A column that is unique
+without anybody declaring it says so, and so does one that holds the same value in every row —
+usually a column somebody forgot to drop.
+
+**What the values look like** is the other half of masking. The mask heuristic reads column *names*:
+`api_key` is a secret, `password_changed_at` is a timestamp. That misses `col_17`, so this reads a
+sample of the rows instead and matches it against the shapes an email address, an IBAN, a card
+number, a phone number, a UUID and a street address have. A card number is checked against its check
+digit, which is what keeps a twelve-digit order number from being called one. **Mask this column**
+adds it to what the studio hides.
+
+**Rules these numbers suggest** turns what is true today into a rule that says it has to stay true:
+a column with no nulls becomes *has a value*, one with no duplicates becomes *no duplicates*, a
+number column becomes a range from the values that are there. Each one lands in
+[Administration → Data quality](administration.md#data-quality), where it can be changed or switched
+off — they are suggestions, not decisions.
+
+A table with more than 60 columns is counted to that point, and the answer says so.
+
+## Dropping a file on the tree
+
+The tree knows what every node is, so a file dragged onto one can go where it obviously belongs —
+no dialog asks first, and only the nodes that can take it light up:
+
+| Dropped on | What happens |
+|---|---|
+| A bucket or a folder in one | The file is uploaded as it is. Several at once are several uploads. |
+| A table | The import dialog opens with the file and the table filled in — the column mapping still needs a person. |
+| A schema, a table folder or a connection | The file becomes a **new table**: described, previewed and created only after that has been read. |
+
+Everything else takes no files. A view cannot be written to, an index is not a place for rows, and a
+column is not a table, so those nodes stay dark and the browser keeps its "no".
+
+## A development subset
+
+"I need production-like data" is usually answered with a full dump: too big to work with and too
+dangerous to keep on a laptop. **Development subset…** in a table's context menu answers it
+differently.
+
+It takes the rows you ask for — a few hundred, optionally with a `WHERE` — and then **follows the
+foreign keys upwards**: the customers those orders belong to, the countries those customers are in.
+That is what makes the result loadable; a subset whose foreign keys point at nothing is a text file.
+References to *children* are deliberately not followed — "every order for these customers" is a
+different and much larger question.
+
+What is about people is replaced: names, addresses, cities, phone numbers, free text. Two rules make
+that useful rather than merely safe:
+
+- **Keys are never touched.** Renaming an id would undo the work of following the references.
+- **The same value always becomes the same replacement**, so two tables that both name the customer
+  still agree. It cannot be turned back — a hash is not a cipher.
+
+Secrets — a column called `api_token`, `password`, `card_number` — are not made plausible. They are
+dropped, in a shape the column can still hold.
+
+The answer is one SQL script: `CREATE TABLE` for each table, parents before the tables that reference
+them, then the inserts. It opens in a query tab or downloads as a file, and it is exactly what
+`WDS_SEED_SQL` loads into a fresh container. What the subset could not do is written into the script
+as a comment: a multi-column foreign key it left out, a reference cycle that needs its constraints
+deferred, the table cap it stopped at.
+
+Turning the replacement off is allowed and says so, in the dialog and in the script's own header:
+that file is real data, and belongs wherever real data belongs.
+
 ## Panels
 
 Every panel is a dockview panel: drag it by its tab, drop it anywhere, split the group, and the
@@ -68,15 +218,20 @@ Right-click a tab for:
 | Action | What it does |
 |---|---|
 | Close | closes this panel |
-| Close others | closes every other panel, except pinned and protected ones |
-| Close to the right | closes the tabs after this one in the same group |
-| Close all | closes everything closable |
-| Pin — keep it open | the tab loses its × and survives "close others" and "close all" |
+| Close others | closes the other tabs opened during this session |
+| Close to the right | the same, for the tabs after this one in the same group |
+| Close all | closes every tab opened during this session |
+| Pin — keep it open | the tab loses its × and survives all three |
 | Maximize / Restore | the group fills the studio, or goes back |
 | Open in its own window | the group moves into a separate browser window |
 
-The explorer and the start page are never closed by "close others" or "close all": they are the way
-back to everything else.
+**Closing many at once leaves the furniture standing.** The three closing actions apply to what
+was opened during the session — queries, tables, tools. The explorer, the structure and plan side,
+the history and saved lists and the start page are the window's own arrangement, and closing them
+would mean rebuilding it, which is not what anybody means by closing a dozen query tabs.
+
+Close one of those on purpose and it closes — except the explorer and the start page, which are the
+way back to everything else and have no × at all.
 
 ### A panel in its own window
 

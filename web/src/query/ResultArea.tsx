@@ -2,10 +2,14 @@ import { useCallback, useState } from "react";
 import { Badge, Button, Group, Menu, ScrollArea, SegmentedControl, Tabs, Text } from "@mantine/core";
 import { IconAlertTriangle, IconCopy, IconDownload, IconTable } from "@tabler/icons-react";
 import { copyAsCsv, copyAsJson, copyAsMarkdown, copyAsSqlInList } from "../export/copyAs";
+import { KeepAsTableButton } from "./KeepAsTableButton";
 import { ResultGrid } from "../grid/ResultGrid";
 import { RowFormView } from "../grid/RowFormView";
 import { DocumentResultArea } from "../documents/DocumentResultArea";
 import { TransposedView } from "../grid/TransposedView";
+import { describeZone } from "../grid/formatTime";
+import { preferences } from "../shell/preferences";
+import { PivotView } from "../grid/PivotView";
 import { ResultChart } from "../chart/ResultChart";
 import { ResultCompare, type NamedResult } from "../compare/ResultCompare";
 import type { ResultState } from "./resultStore";
@@ -13,7 +17,7 @@ import { ShareButton } from "../share/ShareButton";
 import { GeoView } from "../geo/GeoView";
 import { KeepArchiveButton } from "../archive/KeepArchiveButton";
 
-type View = "grid" | "form" | "transposed" | "chart" | "map" | "compare";
+type View = "grid" | "form" | "transposed" | "pivot" | "chart" | "map" | "compare";
 
 export function ResultArea({ result, onExport, changed, connectionId, sql }: {
   result: ResultState;
@@ -75,12 +79,18 @@ export function ResultArea({ result, onExport, changed, connectionId, sql }: {
                     { label: "Grid", value: "grid" },
                     { label: "Form", value: "form" },
                     { label: "Transposed", value: "transposed" },
+                    // One column down the side, another across the top: "how many per status per
+                    // month" without writing the GROUP BY for it.
+                    { label: "Pivot", value: "pivot" },
                     { label: "Chart", value: "chart" },
                     { label: "Map", value: "map" },
                     // Comparing needs a second result; the switch stays but says why it is empty.
                     { label: "Compare", value: "compare" },
                   ]} />
                 {s.running && <Text size="xs" c="dimmed">running… {s.rowsRead} rows</Text>}
+                {describeZone(preferences().timeZone) && (
+                  <Text size="xs" c="dimmed">{describeZone(preferences().timeZone)}</Text>
+                )}
                 <Group gap={4} ml="auto">
                   <Menu withinPortal>
                     <Menu.Target>
@@ -100,9 +110,13 @@ export function ResultArea({ result, onExport, changed, connectionId, sql }: {
                     </Menu.Dropdown>
                   </Menu>
                   {connectionId && sql && <ShareButton connectionId={connectionId} sql={sql} />}
-                  {/* A share is a link to a snapshot; an archive is a file the studio keeps. */}
+                  {/* A share is a link to a snapshot; an archive is a file the studio keeps; a
+                      table is the result itself, back in a database. */}
                   {connectionId && sql && (
                     <KeepArchiveButton connectionId={connectionId} sql={sql} />
+                  )}
+                  {connectionId && sql && (
+                    <KeepAsTableButton connectionId={connectionId} sql={sql} />
                   )}
                   {onExport && (
                     <Button size="compact-xs" variant="default" leftSection={<IconDownload size={13} />}
@@ -117,6 +131,7 @@ export function ResultArea({ result, onExport, changed, connectionId, sql }: {
                     changed={s.index === 0 ? changed : undefined} />
                   : view === "form" ? <RowFormView result={s} index={formRow} onIndexChange={setFormRow} />
                   : view === "transposed" ? <TransposedView columns={s.columns} rows={s.rows} />
+                  : view === "pivot" ? <PivotView columns={s.columns} rows={s.rows} />
                   : view === "chart" ? <ResultChart columns={s.columns} rows={s.rows} />
                   : view === "map" ? <GeoView columns={s.columns} rows={s.rows} />
                   : <ResultCompare initialLeft={`s${s.index}`} results={result.statements

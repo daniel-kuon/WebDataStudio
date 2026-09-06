@@ -14,6 +14,10 @@ public enum SchemaNodeKind
     TablespaceFolder, Tablespace,
     PublicationFolder, Publication,
     SubscriptionFolder, Subscription,
+
+    // Object storage: a container, a prefix inside it, an object, and the row that fetches the next
+    // page of a listing — because a container is paged rather than walked.
+    Container, Prefix, StorageObject, StorageMore,
 }
 
 /// Identifies an object across the whole tree. `Path` is the ordered chain of names from the
@@ -64,4 +68,8 @@ public sealed record ObjectDetail(
     long? RowCount,
     long? SizeBytes,
     string? Comment,
-    string? Ddl);
+    string? Ddl,
+    /// True for a relation that holds no rows of its own — a partitioned table's root. It reads
+    /// like a table and cannot be addressed like one: a physical row address belongs to whichever
+    /// partition holds the row, and two partitions can hand out the same one. See RowIdentity.
+    bool Partitioned = false);

@@ -11,6 +11,146 @@ destruktiven sind markiert und fragen vor dem Ausführen nach.
 Der Endpunkt nimmt eine Befehls-Id aus diesem Katalog, nie rohes SQL, und quotet das Ziel über den
 Dialekt — dieses Panel kann also keine zweite, ungeloggte Abfragekonsole werden.
 
+## Jobs
+
+Was der Server selbst nach Plan ausführt, egal wie es dort heißt: SQL-Server-Agent-Jobs, pg_cron-
+Einträge, MySQL-Events. Ein Tab, denn die Frage ist dieselbe — was läuft, wann, und hat es
+funktioniert. Jede Zeile trägt den Plan, das Ergebnis des letzten Laufs und den nächsten Termin; ein
+Klick auf einen Job öffnet seine Historie.
+
+Lesen ist frei. Ändern nicht: **Enable**, **Disable** und **Run now** erzeugen ein Statement in einem
+Abfragetab, das dann denselben Weg geht wie alles Handgetippte. pg_cron und MySQL haben kein „jetzt
+ausführen“ und sagen das, statt heimlich einen Job-Körper auszuführen.
+
+Eine leere Liste ist kein Fehler — pg_cron kann fehlen, der Agent-Dienst aus sein, der Event-Scheduler
+abgeschaltet — und der Tab sagt, in welchem Scheduler er nachgesehen hat. Eine Engine ohne eigenen
+Scheduler sagt stattdessen genau das.
+
+## Aufzeichnen
+
+„Was läuft in der nächsten Minute auf diesem Server?“ Zeitfenster wählen, **Capture** drücken, und das
+Studio liest einmal pro Sekunde die eigene Liste des Servers und gruppiert, was es sieht, nach
+Statement — das längste zuerst, mit Anzahl der Sichtungen, Benutzer und ob es blockiert war.
+
+Das ist Sampling, kein Tracing: ein Statement, das zwischen zwei Messungen beginnt und endet, wird
+nicht gesehen, und der Tab sagt das. Extended Events und Äquivalente sind die richtige Antwort auf
+diese Frage und brauchen Rechte, die ein Studio nicht einfordern sollte. Eine Aufzeichnung lässt sich
+früher stoppen und behält, was sie gesehen hat; eine, die schon lief, wird beim Öffnen aufgenommen.
+
+**What should I change?** — gefragt, nachdem die Aufzeichnung gestoppt hat, denn ein Ratschlag über
+eine Minute, die noch beobachtet wird, würde sich dauernd verschieben. Die zwanzig langsamsten
+Statements liest derselbe Index-Advisor, den der Health-Report benutzt, und die Vorschläge werden je
+Tabelle zusammengefasst: wie vielen Statements es hilft, wie langsam das langsamste war, und das
+`CREATE INDEX` selbst, das in einem Query-Tab landet statt hier zu laufen. „Nichts vorzuschlagen“ ist
+auch eine Antwort und wird gesagt.
+
+## Datenqualität
+
+Der Health-Report liest den Katalog: eine Tabelle ohne Primärschlüssel, ein Index, den niemand nutzt.
+Er kann nicht sagen, dass ein Drittel der Bestellungen von gestern keinen Kunden hat — das steht nicht
+im Katalog, das steht in den Zeilen. Der Tab **Data quality** ist die andere Hälfte.
+
+Eine Regel ist eine zählende Abfrage. Tabelle, Spalte und Art wählen:
+
+| Regel | Was sie zählt | Geschrieben als |
+|---|---|---|
+| Has a value | Zeilen, in denen die Spalte null ist | — |
+| No duplicates | die zusätzlichen Zeilen jeder Gruppe, die mehr als einmal vorkommt | — |
+| Between two numbers | Werte außerhalb des Bereichs | `0..100` |
+| Points at a row that exists | Werte ohne passende Zeile in einer anderen Tabelle | `customers.id` oder `sales.customers.id` |
+| Newest value is recent | eins, wenn der neueste Wert älter ist | `24h`, `30m`, `7d` |
+| My own condition | Zeilen, die sie erfüllen | `total < 0 OR status = ''` |
+
+Die Argumente werden **geparst, nicht eingesetzt**: ein Bereich sind zwei Zahlen, eine Referenz sind
+Tabelle und Spalte, ein Intervall sind Zahl und Einheit. Die Ausnahme ist der eigene Ausdruck — das
+ist eigenes SQL und wird behandelt wie das, was jemand in einen Query-Tab tippt.
+
+Zwei Entscheidungen, die man kennen sollte. `NULL` ist keine kaputte Referenz: „noch kein Kunde“ ist
+eine andere Regel, und *Has a value* ist die, die das findet. Und eine Regel, die nicht geprüft werden
+kann — eine umbenannte Spalte —, sagt warum, statt die Regeln danach zu stoppen.
+
+**Run now** führt jede aktive Regel aus und zeigt, was sie gezählt hat, Fehlschläge zuerst; das
+zählende Statement ist einen Klick entfernt in einem Query-Tab. Eine Regel lässt sich abschalten, ohne
+sie zu löschen.
+
+![Regeln über die Daten](../../assets/screenshots/quality-dark.png)
+
+Eine fehlschlagende Regel wird außerdem ein **Health-Finding** — der Alert-Webhook trägt sie also
+mit: eine einmal geschriebene Regel wird von da an beobachtet, ohne dass jemand das Studio öffnet.
+
+**In welche Richtung es geht.** Jeder Lauf ist eine Messung — eine Zahl pro Regel —, deshalb sagt die
+Spalte *Since* `worse by 7`, `better by 3`, `fixed` oder `unchanged` und nicht nur, was heute gezählt
+wurde. Ein Mittelwert über einen Monat sagt nichts über die Richtung, und die ist das Einzige, was
+jemand fragt.
+
+**Regeln, die zur Bereitstellung gehören.** Im Studio geschriebene Regeln sind Workspace-Zustand;
+Regeln, die zur Bereitstellung gehören, gehören ins Repository — zu den Seed-Skripten und
+Export-Templates. `WDS_QUALITY_FILE` zeigt auf eine JSON-Datei oder einen Ordner davon:
+
+```json
+[
+  {
+    "connection": "SHOP",
+    "schema": "public",
+    "table": "invoices",
+    "column": "customer_id",
+    "kind": "NotNull",
+    "message": "every invoice needs a customer"
+  }
+]
+```
+
+Jeder Eintrag benennt seine Verbindung so, wie ein Mensch es tut — beim Namen —, und das Studio löst
+sie auf. Diese Regeln sind als **shipped** markiert: sie laufen und melden, und das Studio kann sie
+nicht ändern oder löschen. Eine Regel für eine Verbindung, die dieses Studio nicht hat, wird mit
+einer Zeile im Log übersprungen, statt die anderen mitzunehmen; und eine unlesbare Datei lässt die
+hier geschriebenen Regeln in Ruhe.
+
+Aus einem Aspire-AppHost ist das `WithQualityRules("quality")`.
+
+## Wachstum
+
+Der Tab „Datenbanken“ zeichnet die Größen als Treemap und darunter dieselben Tabellen, geordnet
+danach, *wie stark sie gewachsen sind*. Gemessen wird, wann immer jemand hinsieht — die Historie baut
+sich also selbst auf, statt eine Entscheidung zu brauchen: der erste Blick ist eine Größe, der zweite
+ein Wachstum.
+
+Die größte absolute Änderung zuerst, mit Prozent, wo Prozent etwas bedeutet — eine Tabelle, die bei
+null angefangen hat, hat keinen sinnvollen Prozentwert —, und einer Rate pro Tag, damit Woche und
+Monat vergleichbar sind. Eine geschrumpfte Tabelle ist anders markiert als eine gewachsene, denn
+beides ist eine Antwort.
+
+## Audit
+
+Wer hat über dieses Studio was getan: eine Zeile pro Anfrage, die etwas geändert oder Daten aus dem
+Haus getragen hat, mit Person, Verbindung und Ergebnis. Filter nach Person, nach Verbindung oder
+danach, was passiert ist — die Suche liest auch das Statement, „wer hat das gelöscht“ ist also ein
+Tabellenname im Feld.
+
+![Wer was getan hat](../../assets/screenshots/audit-dark.png)
+
+Aufzeichnung und Aufbewahrung steuern `WDS_AUDIT` und `WDS_AUDIT_DAYS`; siehe
+[Umgebungsvariablen](environment.md#wer-was-getan-hat).
+
+## LISTEN / NOTIFY
+
+**Tools → Notifications** beobachtet den Nachrichtenbus von PostgreSQL selbst: den Kanal, über den
+sich eine Job-Queue meldet, den ein Trigger auslöst, den ein Cache abhört. Kanäle eintragen,
+*Listen* drücken — und was ankommt, erscheint, während es ankommt: Uhrzeit, Kanal, Nutzlast und der
+Backend-Prozess, der gesendet hat. Letzteres beantwortet die Frage „war das ich oder die Anwendung?"
+
+**Send** verschickt selbst eine, um die andere Seite auszuprobieren, ohne einen Client zu schreiben.
+Eine schreibgeschützte Verbindung hört zu und sendet nicht.
+
+Zwei Dinge, die man wissen sollte:
+
+- Ein Kanal ist ein **Bezeichner**, kein String. `MixedCase` bleibt `MixedCase` und wird nicht auf
+  Kleinschreibung gefaltet — so trifft es die Anwendung, die es genauso schreibt.
+- Es wird nichts gespeichert. Eine Benachrichtigung, die eintrifft, während niemand zuhört, ist weg.
+  Das ist PostgreSQLs Entwurf, nicht der des Studios.
+
+Redis hat dieselbe Idee unter anderem Namen, in seinem eigenen Panel.
+
 ## Sitzungen
 
 Die Sitzungsliste zeigt, wer verbunden ist, was läuft, wie lange es schon dauert und wer wen
@@ -21,10 +161,35 @@ blockiert. Eine Sitzung lässt sich beenden, nach einer Rückfrage, die ihr aktu
 Datenbanken auflisten, anlegen und löschen — bei den Engines, die mehr als eine haben. Das Löschen
 verlangt, dass du den Namen tippst.
 
-## Benutzer und Rechte
+## Konten und Rollen
 
-Benutzer auflisten sowie anlegen oder ein Recht vergeben, über dieselbe Vorschau-dann-Anwenden-
-Abfolge wie im Rest der Anwendung: erst steht das Statement da, dann läuft es.
+Der Tab **Accounts** listet, was der Server kennt: Konten, Rollen und den Unterschied. In PostgreSQL
+gibt es nur eine Sorte Ding, und der Unterschied ist, ob es sich anmelden darf; die anderen Engines
+führen beides getrennt — der Tab sagt so oder so, was was ist.
+
+Pro Zeile: Konto oder Rolle, Superuser, ob Anmelden überhaupt geht, wann es abläuft, und **in welchen
+Rollen es steckt** — Letzteres ist meist die Antwort auf „warum kann die das lesen“. Ein Klick auf
+eine Zeile zeigt, was ihr **direkt** gewährt wurde; alles Weitere kommt aus ihren Rollen, und das
+Panel sagt das, statt eine leere Liste zu zeigen.
+
+Was sich ändern lässt, jeweils über das zuerst gezeigte Statement:
+
+| | Was geschrieben wird |
+|---|---|
+| New account…, New role… | `CREATE ROLE … LOGIN`, `CREATE ROLE … NOLOGIN`, `CREATE USER`, `CREATE LOGIN` — je Engine |
+| New password… | `ALTER ROLE … PASSWORD`, `ALTER USER … IDENTIFIED BY`, `ALTER LOGIN … WITH PASSWORD` |
+| Stop it signing in… | `NOLOGIN`, `ACCOUNT LOCK`, `DISABLE` — der billigste Weg, ein Konto zu stoppen, ohne seine Rechte zu verlieren, und der Weg zurück |
+| Put in a role…, Take out of a role… | `GRANT role TO member`, auf SQL Server `ALTER ROLE … ADD MEMBER` |
+| Grant a privilege…, Take a privilege back… | `GRANT`/`REVOKE`, auf eine Tabelle oder auf etwas wie `ALL TABLES IN SCHEMA public` |
+| Drop… | `DROP ROLE`, `DROP USER`, `DROP LOGIN` |
+
+Zwei Dinge macht das Panel bewusst nicht. Es führt nie etwas aus, ohne das Statement zu zeigen — und
+das Statement landet nicht im Audit-Trail, wenn ein Passwort darin steht: was passiert ist, wird
+festgehalten, das Passwort nicht. Und Konten aufzulisten ist selbst ein Recht: eine Verbindung ohne
+dieses Recht bekommt eine leere Liste mit einem Satz dazu, statt eines Fehlers, mit dem niemand
+etwas anfangen kann.
+
+MongoDB, Redis, SQLite und DuckDB haben keine Konten, die dieses Panel verwalten kann, und sagen es.
 
 ## Server-Log
 

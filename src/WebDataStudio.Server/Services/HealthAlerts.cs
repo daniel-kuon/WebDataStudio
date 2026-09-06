@@ -8,7 +8,10 @@ namespace WebDataStudio.Server.Services;
 /// somewhere without being asked would be the wrong kind of surprise.
 public sealed record AlertOptions(
     bool Configured, string Webhook, TimeSpan Interval, string MinSeverity,
-    IReadOnlySet<string> Connections)
+    IReadOnlySet<string> Connections,
+    /// Where this studio can be reached from wherever the alert lands, or empty. A container cannot
+    /// know its own public address, so a link is only offered when a deployment says one.
+    string PublicUrl = "")
 {
     /// The order the analyzers use, so "warning and worse" is a comparison rather than a list.
     private static readonly string[] Severities = ["info", "warning", "critical"];
@@ -16,9 +19,11 @@ public sealed record AlertOptions(
     public static AlertOptions FromConfiguration(IConfiguration config)
     {
         var webhook = config["WDS_ALERT_WEBHOOK"]?.Trim();
+        var publicUrl = (config["WDS_PUBLIC_URL"] ?? "").Trim().TrimEnd('/');
+
         if (string.IsNullOrEmpty(webhook))
             return new AlertOptions(false, "", TimeSpan.FromHours(1), "warning",
-                new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                new HashSet<string>(StringComparer.OrdinalIgnoreCase), publicUrl);
 
         var minutes = int.TryParse(config["WDS_ALERT_INTERVAL_MINUTES"], out var value) && value > 0
             ? value
@@ -31,7 +36,7 @@ public sealed record AlertOptions(
             .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         return new AlertOptions(true, webhook, TimeSpan.FromMinutes(minutes), severity,
-            new HashSet<string>(connections, StringComparer.OrdinalIgnoreCase));
+            new HashSet<string>(connections, StringComparer.OrdinalIgnoreCase), publicUrl);
     }
 
     public bool Covers(ConnectionSpec spec) =>
@@ -39,6 +44,22 @@ public sealed record AlertOptions(
 
     public bool Reportable(string severity) =>
         Array.IndexOf(Severities, severity.ToLowerInvariant()) >= Array.IndexOf(Severities, MinSeverity);
+
+    /// The link that opens this finding where it was found: the connection, and the object where the
+    /// finding names one. Empty without `WDS_PUBLIC_URL` — half the value of a message is the way
+    /// back to the thing it is about, and a guessed hostname is worse than none.
+    ///
+    /// The shape is the studio's own deep link, the same one "Copy link" writes.
+    public string LinkTo(ConnectionSpec spec, string? objectRef)
+    {
+        if (PublicUrl.Length == 0) return "";
+
+        var connection = Uri.EscapeDataString(spec.Id);
+
+        return objectRef is { Length: > 0 }
+            ? $"{PublicUrl}/#/c/{connection}/o/{Uri.EscapeDataString(objectRef)}"
+            : $"{PublicUrl}/#/c/{connection}";
+    }
 }
 
 /// Runs the studio's own analysis on a timer and posts what is new to a webhook.
@@ -48,7 +69,8 @@ public sealed record AlertOptions(
 /// never open.
 public sealed class HealthAlerts(
     AlertOptions options, ConnectionRegistry registry, SessionFactory factory,
-    HealthAlertSink sink, ILogger<HealthAlerts> log) : BackgroundService
+    HealthAlertSink sink, Analysis.QualityRunner quality, ILogger<HealthAlerts> log)
+    : BackgroundService
 {
     /// Findings already reported, as "connection|category|title". Kept in memory: after a restart
     /// one repeat is better than a store to keep in sync.
@@ -101,6 +123,19 @@ public sealed class HealthAlerts(
                         if (_seen.Add($"{spec.Id}|{finding.Category}|{finding.Title}"))
                             fresh.Add(finding);
                 }
+
+                // The rules somebody wrote about the data belong in the same sweep: the schema being
+                // fine and the rows being wrong are both worth one message.
+                foreach (var result in await quality.RunAsync(spec.Id, ct))
+                {
+                    if (result.Passed) continue;
+
+                    var finding = Analysis.QualityRules.AsFinding(result);
+
+                    if (options.Reportable(finding.Severity)
+                        && _seen.Add($"{spec.Id}|{finding.Category}|{finding.Title}|{result.Violations}"))
+                        fresh.Add(finding);
+                }
             }
             catch (Exception e)
             {
@@ -117,6 +152,41 @@ public sealed class HealthAlerts(
         return sent;
     }
 
+    /// The object a finding is about, as a ref the studio can open — read out of the statement that
+    /// would fix it rather than out of its title.
+    ///
+    /// A title is a sentence: "events has no primary key" ends in "key", which is not a table. The
+    /// fix is SQL, and SQL says which table it is about in one of three places. A finding with no fix
+    /// links to the connection, which is the honest answer.
+    public static string? ObjectOf(AnalyzeFinding finding)
+    {
+        if (finding.Statement is not { Length: > 0 } sql) return null;
+
+        var match = System.Text.RegularExpressions.Regex.Match(sql,
+            @"\bON\s+(?<table>[^\s(;]+)|\bANALYZE\b[^\w]*(?<table2>[\w.""`\[\]]+)|\bTABLE\s+(?<table3>[^\s(;]+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (!match.Success) return null;
+
+        var table = new[] { "table", "table2", "table3" }
+            .Select(group => match.Groups[group].Value)
+            .FirstOrDefault(value => value is { Length: > 0 });
+
+        if (table is null or { Length: 0 }) return null;
+
+        // Quotes belong to the dialect, not to the name the tree knows — and they sit around each
+        // part, not around the whole of "public"."orders".
+        var name = new string(table.Where(c => c is not ('"' or '`' or '[' or ']' or ';')).ToArray());
+        var parts = name.Split('.', StringSplitOptions.RemoveEmptyEntries);
+
+        return parts.Length switch
+        {
+            0 => null,
+            1 => $"Table:{parts[0]}",
+            _ => $"Table:{parts[^2]}/{parts[^1]}",
+        };
+    }
+
     private async Task<bool> PostAsync(
         ConnectionSpec spec, IReadOnlyList<AnalyzeFinding> findings, CancellationToken ct)
     {
@@ -127,8 +197,17 @@ public sealed class HealthAlerts(
         var text = new StringBuilder($"*{spec.Name}* — {findings.Count} new health finding");
         if (findings.Count != 1) text.Append('s');
 
+        var connectionLink = options.LinkTo(spec, null);
+        if (connectionLink.Length > 0) text.Append($" (<{connectionLink}|open the studio>)");
+
         foreach (var finding in findings.Take(10))
+        {
             text.Append($"\n• [{finding.Severity}] {finding.Title}");
+
+            // Half the value of a message is the way back to the thing it is about.
+            var link = options.LinkTo(spec, ObjectOf(finding));
+            if (link.Length > 0) text.Append($" — <{link}|open>");
+        }
 
         if (findings.Count > 10) text.Append($"\n• …and {findings.Count - 10} more");
 
@@ -137,6 +216,7 @@ public sealed class HealthAlerts(
             text = text.ToString(),
             studio = "webdatastudio",
             connection = new { spec.Id, spec.Name, spec.Engine },
+            url = connectionLink.Length > 0 ? connectionLink : null,
             findings = findings.Select(finding => new
             {
                 finding.Category,
@@ -144,6 +224,7 @@ public sealed class HealthAlerts(
                 finding.Title,
                 finding.Detail,
                 fix = finding.Statement,
+                url = options.LinkTo(spec, ObjectOf(finding)) is { Length: > 0 } link ? link : null,
             }),
         };
 

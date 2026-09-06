@@ -272,6 +272,9 @@ it works for every engine whose capability set claims support for it.
 | F2.4 | Object detail panel: columns, indexes, foreign keys, triggers, size, row count, comments |
 | F2.5 | Dependencies in both directions |
 | F2.6 | Several connections open at once |
+| F2.7 | A connection's health in the tree: reachable, how long it took, why not |
+| F2.8 | PostgreSQL LISTEN/NOTIFY: watch the channels, and send one |
+| F2.9 | A data dictionary: tables, columns, keys and notes as one document |
 
 ### F3 Query editor
 | ID | Feature |
@@ -325,9 +328,11 @@ it works for every engine whose capability set claims support for it.
 | F6.1 | Inline editing in the grid, spreadsheet-like, batched |
 | F6.2 | Insert, delete and duplicate rows |
 | F6.3 | Change-script preview before applying — always, not optional |
-| F6.4 | Tables without a primary key: editing blocked with a clear reason |
+| F6.4 | Tables without a primary key: a unique index, then the engine's own row address; blocked with a clear reason where there is neither |
 | F6.5 | Foreign-key lookup dropdown while editing |
 | F6.6 | Bulk update over a selection via macro or expression |
+| F6.7 | Paste rows from the clipboard as inserts |
+| F6.8 | Keep a result as a new table, here or in another connection |
 
 ### F7 Export and import
 | ID | Feature |
@@ -385,6 +390,8 @@ it works for every engine whose capability set claims support for it.
 | F12.1 | ER diagram per schema using `@xyflow/react` and `dagre` |
 | F12.2 | Table selection, auto layout, export as PNG and SVG |
 | F12.3 | Clicking a table in the diagram opens its data or structure |
+| F12.4 | Backups on a schedule, kept and pruned per job |
+| F12.5 | Seed a connection from another one at start |
 
 ### F13 Usability
 | ID | Feature |
@@ -397,6 +404,8 @@ it works for every engine whose capability set claims support for it.
 | F13.6 | Toasts for long-running jobs |
 | F13.7 | Every panel dockable, the explorer included, with a way back to it |
 | F13.8 | The running build visible in the studio and over the API |
+| F13.9 | A draggable split between statement and result, and editor text zoom |
+| F13.10 | Closing many tabs at once leaves the studio's own panels standing |
 
 ### F14 NoSQL (tier 3)
 | ID | Feature |
@@ -404,6 +413,7 @@ it works for every engine whose capability set claims support for it.
 | F14.1 | MongoDB: collection browser, JSON editor, aggregation pipeline, index management |
 | F14.2 | Redis: key tree, type-specific editors, TTL, command console |
 | F14.3 | Result renderer as a JSON tree, switchable to a table for flat documents |
+| F14.7 | Look at a file rather than download it, through an on-demand viewer |
 
 ### F15 Documentation site
 | ID | Feature |
@@ -484,6 +494,67 @@ it works for every engine whose capability set claims support for it.
 | F27.5 | A result kept as a file, listed, reopened, and scripted back as INSERTs |
 | F27.6 | Geography in a result drawn as a shape rather than read as coordinates |
 | F27.7 | "there is no row over there" as a condition in the query builder |
+| F27.8 | Which rows a page holds, said in rows: the range, both ends, a typed page number, the page size, and a count where the total is only an estimate |
+| F28.1 | Object storage as a connection: S3-compatible, Azure Blob, Google Cloud Storage, a folder |
+| F28.2 | Containers, prefixes and objects in the tree, paged rather than walked |
+| F28.3 | An object's details and a preview: text, JSON, CSV, an image, a Parquet schema |
+| F28.4 | A file or a whole prefix queried as a table, through DuckDB, with the studio's own grid |
+| F28.5 | Upload, delete and copy behind a confirmation, refused on a read-only or production connection |
+| F28.6 | The machine's own identity as credentials, or explicit keys stored encrypted |
+| F28.7 | The storage extensions bundled into the image, so a private network needs no download |
+| F28.8 | A storage connection attached from an Aspire app host |
+| F29.1 | What the server runs on a schedule, with its history |
+| F29.2 | A job enabled, disabled or started as a statement |
+| F29.3 | An interactive Entra sign-in, for a person rather than a machine |
+| F29.4 | Presets for the connection strings nobody remembers |
+| F29.5 | What ran in the next minute, sampled |
+| F29.6 | A read of the statement before it runs, which warns and never refuses |
+| F29.7 | Find a value in any table |
+| F29.8 | Read only the schemas somebody works in |
+| F29.9 | Export formats written as text rather than as code |
+| F30.1 | What is inside a JSON column, and the SELECT that flattens it |
+| F30.2 | A file becomes a new table |
+| F30.3 | Follow a table, with what is new tinted |
+| F30.4 | What this studio has run, and whether it is getting slower |
+| F30.5 | How much every table grew |
+| F30.6 | What the captured minute suggests |
+| F30.7 | Rules about the data rather than the schema |
+| F30.8 | A failing rule reported with the health findings |
+| F30.9 | Who did what through this studio |
+| F30.10 | Signing in with an identity provider |
+| F30.11 | A development subset that loads |
+| F30.12 | The newer capabilities as MCP tools |
+| F30.13 | An object shown where it lies |
+| F30.14 | Save as, streamed to where it was asked for |
+| F30.15 | A folder taken with you, as one zip |
+| F30.16 | A file dropped where it belongs |
+| F30.17 | What a table actually holds, counted |
+| F30.18 | A column the values gave away |
+| F30.19 | A rule and a mask made out of the numbers |
+| F30.20 | Quality rules the deployment owns |
+| F30.21 | Which way a rule is going |
+| F30.22 | The rows kept before a statement takes all of them |
+| F30.23 | An index measured rather than claimed |
+| F30.24 | Notes on an object, kept by the studio |
+| F30.25 | A saved query as a form, and a link that runs |
+| F30.26 | An alert that links back to what it is about |
+| F30.27 | The profile and the notes as MCP tools |
+| F30.28 | The data tab on an engine with no SQL: a collection paged with a find, a key space paged as its keys |
+| F30.29 | What the engine could not do with a query, said in the footer rather than swallowed |
+| F30.30 | The theme a deployment starts in, without taking a person's own choice away |
+| F30.31 | Editors for the objects a table designer never covered: views, routines, triggers, sequences, schemas, descriptions |
+| F30.32 | Accounts and roles: who exists, who is in which role, what each may do, and every change as a statement first |
+| F30.33 | A transaction a query tab holds open: begin, look at what it did, commit or roll back |
+| F30.34 | Keep going after a failed statement, when that is what was asked for |
+| F30.35 | A pivot over the result on screen, and two plans of the same statement held against each other |
+| F30.36 | A file out of a binary cell and back into one, as the file it actually is |
+| F30.37 | A notification when a long run finishes and nobody is watching |
+| F30.38 | Timestamps read by a person, on the clock they chose, and never converted when they carry no zone |
+| F30.39 | The schema drift as a script: what to run where the change has not happened yet |
+| F30.40 | A dashboard: statements side by side, running themselves |
+| F30.41 | What a row looked like before, where the database itself kept it |
+| F30.42 | One setting, several paths: what a repository ships and what an app host wrote both count |
+| F30.43 | The rest of what a deployment brings: connections, the masking baseline, dashboards, snippets, the preferences a studio starts with |
 
 ## 10. Safety behaviour
 

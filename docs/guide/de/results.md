@@ -39,11 +39,59 @@ du.
 Exporte streamen: der Server baut die Datei nie komplett im Speicher, eine CSV mit einer Million
 Zeilen kostet also so viel Speicher wie eine mit tausend.
 
+### Eigene Templates
+
+**Templates…** im Export-Dialog schreibt ein eigenes Exportformat: eine Id, ein Name, eine
+Dateiendung, ein Content-Type und bis zu drei Textstücke.
+
+| Platzhalter | Ist |
+|---|---|
+| `{{table}}` | die Tabelle bzw. der Name des Exports |
+| `{{columns}}` | die Spaltennamen, verbunden |
+| `{{values}}` | die Werte der Zeile, verbunden |
+| `{{col.name}}` | eine Spalte nach Namen |
+| `{{index}}` | die Zeilennummer, ab eins |
+| `{{comma}}` | ein Komma in jeder Zeile außer der letzten |
+
+Jeder nimmt einen Filter für die Maskierung, die das Format braucht: `{{values|sql}}` sowie `json`,
+`csv`, `html`, `upper`, `lower`. Ein `INSERT`-Schreiber sind damit drei Zeilen:
+
+```
+header: INSERT INTO {{table}} ({{columns}}) VALUES
+row:      ({{values|sql}}){{comma}}
+footer: ;
+```
+
+DataGrip nennt das Extractors und schreibt sie in Groovy — damit ist ein Exportformat ein Programm,
+das das Studio ausführen müsste. Hier ist es Text, und darin gibt es nichts auszuführen. Ein hier
+gespeichertes Template gehört diesem Studio; `WDS_EXPORT_TEMPLATES_DIR` bindet einen Ordner davon für
+eine Bereitstellung ein, und die sind in der Oberfläche nur lesbar — eine Kopie unter anderer Id ist
+der Weg, eines zu ändern.
+
 ## Kopieren
 
 Das Menü **Copy** legt das Ergebnis als CSV, JSON oder Markdown-Tabelle in die Zwischenablage — und
 eine Markierung als SQL-`IN`-Liste, der schnellste Weg, eine Menge Ids in die nächste Abfrage zu
 bekommen.
+
+## Dieses Ergebnis als Tabelle behalten
+
+**As table** neben einem Ergebnis schreibt es als eigene Tabelle in eine Datenbank zurück: der Join,
+den man sich gerade erarbeitet hat, aufgehoben für das nächste Mal.
+
+Der Dialog fragt nach Namen, optional einem Schema und der Zielverbindung — standardmäßig die
+aktuelle, auf Wunsch jede andere. Bevor etwas entsteht, zeigt er das exakte `CREATE TABLE`, und:
+
+- **Gleiche Engine auf beiden Seiten**: die Spalten behalten die Typen, die sie schon haben.
+- **Andere Engine**: jede Spalte bekommt den nächstliegenden Typ der Zielengine — eher weiter
+  gefasst als geraten, denn eine Spalte, die man nachträglich enger macht, ist besser als eine, die
+  still gerundet hat.
+- Eine Spalte ohne Namen wird `column1`; zwei Spalten gleichen Namens werden `name` und `name_2`.
+  Beides ist in einem Ergebnis normal und in einer Tabelle unmöglich.
+
+Die Zeilen werden erneut aus der Datenbank gelesen, nicht vom Bildschirm kopiert: in der Tabelle
+landet das ganze Ergebnis, nicht dessen erste Seite. Eine schreibgeschützte Verbindung lehnt ab und
+sagt es.
 
 ## Import
 
@@ -54,13 +102,105 @@ einzeln gemeldet, statt die ganze Datei abzubrechen.
 **Copy to another connection…** verschiebt eine Tabelle zwischen zwei Verbindungen, auch über
 Engine-Grenzen hinweg.
 
+## Was in einer JSON-Spalte steht
+
+Eine JSONB-Spalte ist im Grid eine Zelle Text, und eine Zeile davon zu lesen ist geraten. **What is
+in this column?** im Menü einer JSON-Spalte liest eine Stichprobe der Dokumente und antwortet mit der
+Struktur: welche Pfade es gibt, wie oft jeder vorkommt, welche Typen er hält, und ein Beispielwert.
+
+Die Pfade sind nach Tiefe und dann nach erstem Auftreten geordnet — die Struktur liest sich also wie
+das Dokument und nicht wie eine alphabetische Liste. Zu jedem Pfad gehört der Ausdruck, der ihn **auf
+dieser Engine** liest (`->>`, `JSON_VALUE`, `json_extract_string`), und es gibt ein
+**Flatten**-Statement, das die Wertpfade zu Spalten macht, fertig für einen Query-Tab. Arrays und
+Objekte fehlen darin: eine Spalte kann keinen Teilbaum halten.
+
+![Was in einer JSON-Spalte steht](../../assets/screenshots/json-shape-dark.png)
+
+Die Stichprobe ist der ehrliche Teil daran. Der Bericht sagt, wie viele Dokumente er gelesen hat und
+wie viele davon geparst haben; eine Spalte mit hundert Strukturen darin sagt das, statt die erste als
+Wahrheit auszugeben.
+
+## Eine Tabelle verfolgen
+
+Eine Tabelle, in die geschrieben wird, lässt sich im Daten-Tab beobachten: Schlüsselspalte wählen —
+eine Id, ein Zeitstempel, ein Auto-Increment —, dazu ein Intervall, und die Seite liest sich in dieser
+Reihenfolge neu, das Neueste zuerst. **Zeilen, die seit dem letzten Lesen dazugekommen sind, werden
+eingefärbt**, ein Insert ist also sichtbar, ohne zwei Screenshots zu vergleichen.
+
+Angeboten werden nur Schlüsselspalten. Nach einem Fremdschlüssel zu sortieren und das Ergebnis
+„neueste“ zu nennen wäre eine Lüge, die die Färbung glaubhaft macht — die Liste bleibt also bei dem,
+was tatsächlich hochzählt.
+
+## Aus einer Datei eine neue Tabelle
+
+**New table from a file…** ist der andere Import: der für die CSV, die jemand geschickt hat, wo es noch
+keine Tabelle gibt. Datei wählen — ein Upload oder ein Objekt in einem [Bucket](storage.md), das dort
+gelesen wird, wo es liegt — und das Studio beschreibt sie zuerst: die gefundenen Spalten, welcher Typ
+daraus auf der Ziel-Engine wird, zehn Zeilen so, wie sie ankommen werden, und das `CREATE TABLE`
+selbst. Erzeugt wird nichts, bevor das gelesen ist. Verstanden werden Parquet, CSV, TSV, JSON und
+NDJSON; ein ganzes Prefix aus Dateien derselben Form gilt als eine Tabelle.
+
 ## Eine Tabelle durchsehen
 
 Eine mit Doppelklick geöffnete Tabelle hat dieselben Aktionen **Copy** und **Export** wie ein
 Abfrage-Ergebnis: Kopieren nimmt die Seite auf dem Schirm, Export streamt die ganze Tabelle. Die
 Spaltenköpfe haben ein Menü zum Sortieren und Filtern, und beides läuft auf dem Server — eine Seite
 hält standardmäßig 200 von womöglich Millionen Zeilen, im Browser wäre also die falsche Menge
-sortiert. Wie viele es sind, ist eine [Einstellung](shortcuts.md).
+sortiert. Wie viele es sind, ist eine [Einstellung](shortcuts.md) — und direkt unter dem Grid
+änderbar.
+
+### Der Pager
+
+Unter dem Daten-Tab steht, **welche Zeilen** auf dem Schirm sind — `1–200 von 12.345` — nicht nur,
+welche Seitenzahl hervorgehoben ist. Daneben:
+
+- **Erste, vorige, nächste, letzte Seite**, das Ende einer Tabelle ist also ein Klick weit weg;
+- ein **Seitenfeld**, sobald es mehr als fünf Seiten sind: `1400` tippen, Enter;
+- **Zeilen pro Seite**, von 25 bis 5000. Das ist die Einstellung, gilt also auch für die nächste
+  Tabelle, und die Zeile, die du gerade ansiehst, bleibt sichtbar: von 200 auf 25 auf Seite 14 landet
+  auf Seite 105, nicht auf Seite 14 von etwas anderem.
+
+Zwei Dinge zur Gesamtzahl. Bei PostgreSQL, SQL Server und MySQL kommt sie aus dem Katalog und ist
+damit eine Schätzung — angezeigt als `von ≈12.345`. Und ein Filter verkleinert das Ergebnis, ohne dass
+der Katalog davon etwas weiß; dann steht dort `von ?` statt einer Zahl über eine andere Menge. Die
+Schaltfläche **∑** daneben zählt echt, Filter inklusive — bei einer großen Tabelle ist das ein Scan,
+deshalb ein Knopf und nichts, was das Studio von allein tut.
+
+### Eine Engine ohne SQL
+
+Für MongoDB und Redis baut der Daten-Tab kein `SELECT` — er fragt den Treiber nach der Seite, und der
+baut sie so, wie seine Engine es kann:
+
+- Eine **MongoDB-Collection** wird mit `find().sort().skip().limit()` gelesen. Der Spaltenfilter wird
+  in die Abfrage übersetzt: `^ada` wird ein verankerter regulärer Ausdruck, `>10` ein `$gt` mit einer
+  Zahl, `=a,=b` ein `$in`, `NULL` eine Null-Prüfung. Blättern und Sortieren passieren im Server, die
+  Reihenfolge gilt also für die Collection und nicht für die Seite. Die Spalten sind die Form, die das
+  Struktur-Panel gesampelt hat; ein Feld, das diese Seite zeigt und das im Sample nie vorkam, wird
+  hinten angehängt und als `unsampled` markiert — Dokumente haben kein Schema, und genau deshalb
+  zeigt man sie. Ein verschachteltes Dokument oder ein Array bleibt JSON in seiner Zelle, „was steht
+  in diesem JSON“ aus dem Spaltenmenü gilt also auch dafür.
+- Eine **Redis-Datenbank oder ein Präfix-Ordner** wird als die Schlüssel gelesen, die darin liegen:
+  der Schlüssel, sein Typ, seine TTL in Sekunden, seine Länge und was er an Speicher kostet. Das ist
+  die Inventarliste, die man von einem Cache tatsächlich will, und sie sortiert, filtert und
+  exportiert wie jedes andere Gitter. Ein Schlüsselraum wird gescannt und nicht indiziert: eine Seite
+  sieht sich die ersten 20 000 Schlüssel an, und die Fußzeile sagt es, wenn dort Schluss war.
+  `MEMORY USAGE` gibt es nicht auf jedem gemanagten Redis; wo es abgelehnt wird, bleibt die Spalte
+  leer, statt die Seite scheitern zu lassen.
+- Ein **einzelner Redis-Schlüssel** wird als die Tabelle gelesen, die sein Typ ergibt: Feld und Wert
+  bei einem Hash, Index und Wert bei einer Liste, die Mitglieder einer Menge, Mitglied und Score bei
+  einem Sorted Set, Id und Felder bei einem Stream, der Wert und seine Länge bei einem String. Ein
+  Doppelklick öffnet einen Schlüssel weiterhin im Schlüssel-Browser, dort lässt sich der Wert
+  bearbeiten; das Gitter ist der andere Blick darauf — und der Weg, ihn zu sortieren oder zu filtern.
+
+Zwei Dinge folgen daraus, dass es kein SQL gibt. Das Gitter ist **nur lesbar** und nennt stattdessen
+den Befehl, der schreibt — `updateOne` für ein Dokument, `HSET` für ein Hash-Feld —, statt einen
+Speichern-Knopf zu zeigen, der nicht funktionieren kann. Und das Spaltenmenü bietet keine Liste der
+vorkommenden Werte an: die zu zählen ist ein `GROUP BY`, also wird das mit Begründung abgelehnt und
+der Filter stattdessen getippt.
+
+Was die Engine mit der Abfrage nicht machen konnte, steht in der Fußzeile neben der Zeilenzahl, statt
+still verschluckt zu werden: ein Filter ohne Übersetzung, eine Sortierung, für die ein Schlüsselraum
+keine eigene Ordnung hat, ein Scan, der an seiner Grenze aufhörte.
 
 ## Die Filtersprache
 
@@ -97,6 +237,65 @@ Sprache, und ein gemeinsames Fall-Korpus (`tests/filter-cases.json`) hält sie e
 Das Spaltenmenü der Tabellenansicht listet außerdem die **vorhandenen Werte mit ihrer Anzahl** als
 Checkboxen, häufigste zuerst. Angehakte Werte landen als `=a,=b` im Filterfeld — eine Art zu tippen,
 kein zweites Filter. Eine maskierte Spalte hat keine Liste: ihre Werte sind genau das Geheimnis.
+
+## Zeitstempel und Zeitzonen
+
+Ein Zeitstempel kommt vom Treiber als `2026-08-29T14:00:00.0000000Z` — korrekt, und nicht das, was
+jemand liest. Das Gitter zeigt `2026-08-29 14:00:00`, behält Nachkommastellen nur, wenn sie etwas
+sagen, und beim Überfahren steht weiterhin der Rohwert da — denn „welcher ist es denn nun wirklich“
+ist genau die Frage, um die es geht.
+
+**Welche Uhr.** *Show timestamps in* in den [Einstellungen](shortcuts.md) ist die Zone dieses
+Rechners, UTC oder eine benannte Zone. Es ändert nur die Anzeige; auf dem Weg in die Datenbank wird
+nichts umgeschrieben. Ist es nicht deine eigene Zone, sagt es die Fußzeile — `times in UTC` —, damit
+ein Screenshot später nicht falsch gelesen wird.
+
+**Ein Wert ohne Zone wird nie umgerechnet.** `timestamp without time zone` mit 14:00 bedeutet 14:00;
+daraus 16:00 zu machen, weil der Leser in Berlin sitzt, wäre eine Erfindung. Solche Zellen sind
+gepunktet unterstrichen und sagen beim Überfahren `no time zone`, und der Spaltenkopf sagt, welche
+der beiden Sorten die Spalte ist (`timestamptz — stored with a time zone`). Aus genau diesem
+Unterschied entsteht die Sorte Unfall, bei der der falsche Tag gelöscht wird.
+
+## Pivot
+
+Das Gitter beantwortet „was ist hier drin“, das Gruppieren „wie viele je Status“. **Pivot** ist die
+dritte Frage — „wie viele je Status *und Monat*“ — und sie wird über die Zeilen beantwortet, die
+schon auf dem Schirm sind, statt über ein `GROUP BY`, das man erst schreiben müsste.
+
+Eine Spalte für die Zeilen wählen, eine für die Spalten, und was mit den Zahlen passieren soll:
+Anzahl, Summe, Durchschnitt, kleinster, größter Wert. `Anzahl` braucht gar keine Wertspalte,
+deshalb ist es die Voreinstellung. Ein Wert, der keine Zahl ist, wird weggelassen statt als Null
+gezählt — ein Durchschnitt über „die mit einer Zahl“ ist eine Antwort, einer mit eingefalteten
+Nulls nicht. Null bekommt einen eigenen Namen, `(none)`, denn danach zu gruppieren ist eine echte
+Frage. Bei sechzig verschiedenen Spaltenwerten ist Schluss, und das steht da: ein Pivot mit
+neunhundert Spalten ist ein Scrollbalken, keine Antwort.
+
+## Ein Dashboard
+
+**Tools → Dashboard** ist eine Seite mit Statements nebeneinander: die Zahl, nach der jeden Morgen
+jemand fragt, die Tabelle, die nach einem Deployment geprüft wird, ein Balken pro Zeile für „wie
+viele je Status“.
+
+Eine Kachel besteht aus Titel, Verbindung, Statement und dem, was daraus gezeichnet wird — eine
+Zahl, eine Tabelle oder ein Balken pro Zeile. Sie nimmt eine bis vier der vier Spalten ein, und die
+Seite kann sich selbst in einem Intervall neu ausführen (frühestens alle zehn Sekunden; darunter ist
+es ein Lasttest und kein Dashboard). Der Pfeil auf einer Kachel öffnet ihr Statement in einem
+Abfrage-Tab — dort passiert alles, was über Hinsehen hinausgeht.
+
+Nichts hier kann, was ein Abfrage-Tab nicht kann: eine Kachel läuft über denselben Endpunkt, mit
+derselben Zeilengrenze, derselben Maskierung und derselben Zeile im
+[Audit-Trail](administration.md). Eine Kachel, deren Statement scheitert, sagt das auf der Kachel,
+statt ein leeres Kästchen zu zeigen — und es läuft immer nur eine Ausführung je Kachel, ein
+Statement, das länger braucht als das Intervall, staut sich also nicht hinter sich selbst.
+
+Dashboards liegen in der Workspace-Datei des Studios: sie überleben einen Neustart und gehören zum
+Arbeitsbereich, nicht zu einem Browser. Ein Studio ohne Workspace sagt das, statt die Seite zu
+verlieren.
+
+**Ein Dashboard, das zur Bereitstellung gehört**, kommt aus `WDS_DASHBOARD_FILE` — einer JSON-Datei
+derselben Form, oder aus `WithDashboards(...)` in einem Aspire-AppHost. Es trägt die Kennzeichnung
+*from the deployment*, Bearbeiten und Löschen sind aus, und wer es anders will, speichert eine Kopie
+unter anderem Namen.
 
 ## Karte
 

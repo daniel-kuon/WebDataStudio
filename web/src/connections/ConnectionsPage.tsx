@@ -1,22 +1,49 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ActionIcon, Badge, Button, Group, Modal, Stack, Table, Text, Title } from "@mantine/core";
-import { IconPlus, IconTrash } from "@tabler/icons-react";
+import { IconBucket, IconKey, IconPlus, IconTrash } from "@tabler/icons-react";
 import { createConnection, deleteConnection, listConnections, type Connection } from "../api";
 import { ConnectionForm } from "./ConnectionForm";
+import { EntraSignInModal } from "./EntraSignInModal";
+import { StorageWizard } from "./StorageWizard";
 
 export function ConnectionsPage() {
   const [items, setItems] = useState<Connection[]>([]);
   const [adding, setAdding] = useState(false);
+  const [signingIn, setSigningIn] = useState<Connection | null>(null);
+  const [addingBucket, setAddingBucket] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [query, setQuery] = useSearchParams();
 
   const refresh = () => listConnections().then(setItems).catch(e => setError(e.message));
   useEffect(() => { refresh(); }, []);
+
+  // "Add connection" and "Add a bucket" in the palette navigate here and say which form to open.
+  // Without this the command opened the page and left the person looking for the button.
+  useEffect(() => {
+    if (query.get("add") === "1") setAdding(true);
+    if (query.get("bucket") === "1") setAddingBucket(true);
+
+    if (query.has("add") || query.has("bucket")) {
+      const next = new URLSearchParams(query);
+      next.delete("add");
+      next.delete("bucket");
+      // Cleared so a reload does not reopen a dialog somebody closed.
+      setQuery(next, { replace: true });
+    }
+  }, [query, setQuery]);
 
   return (
     <Stack p="md">
       <Group justify="space-between">
         <Title order={4}>Connections</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={() => setAdding(true)}>Add connection</Button>
+        <Group gap="xs">
+          {/* A bucket is a URL, which is a poor thing to type: its own form asks for the pieces. */}
+          <Button variant="default" leftSection={<IconBucket size={16} />}
+            onClick={() => setAddingBucket(true)}>Add a bucket</Button>
+          <Button leftSection={<IconPlus size={16} />} onClick={() => setAdding(true)}>Add connection</Button>
+        </Group>
       </Group>
       {error && <Text c="red" size="sm">{error}</Text>}
       <Table striped highlightOnHover>
@@ -35,8 +62,17 @@ export function ConnectionsPage() {
               <Table.Td>
                 {c.source === "Environment" && <Badge variant="light">from environment</Badge>}
                 {c.readOnly && <Badge color="orange" variant="light" ml={4}>read-only</Badge>}
+                {c.interactive && <Badge color="blue" variant="light" ml={4}>sign-in</Badge>}
               </Table.Td>
               <Table.Td>
+                {/* A connection opened as a person: nothing can be read from it until somebody has
+                    signed in, so the sign-in is offered here rather than behind a failed query. */}
+                {c.interactive && (
+                  <ActionIcon variant="subtle" aria-label={`Sign in to ${c.name}`}
+                    onClick={() => setSigningIn(c)}>
+                    <IconKey size={16} />
+                  </ActionIcon>
+                )}
                 {c.source === "Stored" && (
                   <ActionIcon variant="subtle" color="red"
                     onClick={() => deleteConnection(c.id).then(refresh).catch(e => setError(e.message))}>
@@ -48,6 +84,14 @@ export function ConnectionsPage() {
           ))}
         </Table.Tbody>
       </Table>
+
+      {signingIn && (
+        <EntraSignInModal connectionId={signingIn.id} name={signingIn.name} opened
+          onClose={() => setSigningIn(null)} />
+      )}
+
+      <StorageWizard opened={addingBucket} onClose={() => setAddingBucket(false)}
+        onCreated={refresh} />
 
       <Modal opened={adding} onClose={() => setAdding(false)} title="Add connection">
         <ConnectionForm

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using WebDataStudio.Server.Drivers;
 using WebDataStudio.Server.Drivers.Abstractions;
 using WebDataStudio.Server.Services;
 
@@ -7,9 +8,19 @@ namespace WebDataStudio.Server.Endpoints;
 public static class QueryEndpoints
 {
     public record ExecuteRequest(string ConnectionId, string Sql, int? MaxRows, int? TimeoutSeconds,
-        string? Schema, Dictionary<string, string?>? Parameters, bool? Transactional = null);
+        string? Schema, Dictionary<string, string?>? Parameters, bool? Transactional = null,
+        /// A transaction this tab is holding open — see OpenTransactions. The statements run inside
+        /// it, and nothing is committed until somebody says so.
+        string? TransactionId = null,
+        /// Keep going after a statement fails, and report what failed at the end. Off by default:
+        /// stopping at the first error is what a migration wants.
+        bool? ContinueOnError = null);
+
+    public record BeginRequest(string ConnectionId);
 
     public record PlanRequest(string ConnectionId, string Sql, string Mode);
+
+    public record InspectRequest(string ConnectionId, string Sql);
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -18,26 +29,65 @@ public static class QueryEndpoints
         var defaultMaxRows = int.TryParse(app.Configuration["WDS_MAX_ROWS"], out var m) ? m : 1000;
         var defaultTimeout = int.TryParse(app.Configuration["WDS_QUERY_TIMEOUT_SECONDS"], out var t) ? t : 300;
 
+        // A read of the SQL before it runs: an UPDATE with no WHERE, an accidental cross product,
+        // = NULL. It warns and never refuses — every one of these is something a person can
+        // legitimately mean, and refusing would only teach people to bypass it.
+        app.MapPost("/api/query/inspect", (InspectRequest body, ConnectionRegistry connections,
+            DriverRegistry drivers) =>
+        {
+            var engine = connections.Find(body.ConnectionId)?.Engine;
+            var dialect = engine is { Length: > 0 } known
+                ? drivers.Get(known).Dialect
+                // No connection chosen yet: the checks that matter here are the same in every
+                // dialect, so a default is better than a refusal.
+                : drivers.Get("postgresql").Dialect;
+
+            return Results.Ok(SqlInspections.Inspect(body.Sql, dialect));
+        });
+
         app.MapPost("/api/query/execute", async (ExecuteRequest body, HttpContext ctx,
-            SessionFactory factory, QueryRunner runner, MaskPolicyStore policies) =>
+            SessionFactory factory, QueryRunner runner, MaskPolicyStore policies,
+            Archives archives, SafetyOptions safety, OpenTransactions transactions) =>
         {
             IDbDriver driver;
             IDbSession session;
-            try
+
+            // A tab holding a transaction open runs on that session, and it is not disposed here:
+            // the transaction outlives the request, and closing it is a deliberate second call.
+            var held = body.TransactionId is { Length: > 0 } id ? transactions.Use(id, body.Sql) : null;
+
+            if (body.TransactionId is { Length: > 0 } && held is null)
+                return Results.Json(new
+                {
+                    message = "this transaction is not open any more; it was committed, rolled back "
+                              + "or timed out",
+                }, statusCode: StatusCodes.Status409Conflict);
+
+            if (held is { } open)
             {
-                (driver, session) = await factory.OpenAsync(body.ConnectionId, ctx.RequestAborted);
+                (driver, session) = (open.Driver, open.Session);
             }
-            catch (UnknownConnectionException e)
+            else
             {
-                return Results.NotFound(new { message = e.Message });
-            }
-            catch (Exception e)
-            {
-                return Results.Json(new { message = e.Message }, statusCode: 502);
+                try
+                {
+                    (driver, session) = await factory.OpenAsync(body.ConnectionId, ctx.RequestAborted);
+                }
+                catch (UnknownConnectionException e)
+                {
+                    return Results.NotFound(new { message = e.Message });
+                }
+                catch (Exception e)
+                {
+                    return Results.Json(new { message = e.Message }, statusCode: 502);
+                }
             }
 
             using var span = Telemetry.Span("query.execute");
             span?.SetTag("engine", driver.Info.Id);
+
+            // The route says a statement was run; only this knows which one and against what.
+            Audit.Detail(ctx, body.Sql, body.ConnectionId);
 
             var started = System.Diagnostics.Stopwatch.StartNew();
             var returned = 0L;
@@ -49,7 +99,9 @@ public static class QueryEndpoints
 
             var request = new ScriptRequest(body.Sql, body.MaxRows ?? defaultMaxRows,
                 body.TimeoutSeconds ?? defaultTimeout, body.Schema, body.Parameters,
-                body.Transactional ?? false);
+                // A held transaction is already open, so the per-script one would nest.
+                body.Transactional == true && held is null,
+                body.ContinueOnError ?? false);
 
             // A query is the other way into the same data as the data tab, so it cannot be the way
             // around the mask policy. The columns chunk decides which indexes are hidden; the row
@@ -57,8 +109,42 @@ public static class QueryEndpoints
             var policy = policies.For(body.ConnectionId);
             var masked = new HashSet<int>();
 
-            await using (session)
+            // `await using` on a held session would hand it back to the pool mid-transaction.
+            await using (held is null ? session : null)
             {
+                // A statement that takes every row gets a copy of them first: the archive is a file
+                // the studio can list, reopen and script back out as inserts, which is the only
+                // undo a DELETE has ever had. Read on this session before the statement runs, so
+                // the order is "keep, then take" whatever happens next.
+                var kept = new List<KeptRows>();
+
+                if (safety.Enabled && archives.Available)
+                    try
+                    {
+                        var sweeping = SafetyNet.Sweeping(body.Sql, driver.Dialect);
+
+                        kept.AddRange(await SafetyNet.KeepAsync(driver, session, archives, policy,
+                            sweeping, safety, body.TimeoutSeconds ?? defaultTimeout, source.Token));
+
+                        foreach (var one in kept)
+                            await WriteAsync(ctx,
+                                Wire(new ResultChunk.Message(0, "info", one.Describe()), masked),
+                                source.Token);
+                    }
+                    catch (Exception e)
+                    {
+                        // A copy that could not be taken is worth saying so, and worth saying before
+                        // the statement runs — but it is not a reason to refuse a statement somebody
+                        // asked for. WDS_SAFETY_NET=false is how to mean it every time.
+                        await WriteAsync(ctx, Wire(new ResultChunk.Message(0, "warning",
+                            $"the rows could not be kept first: {e.Message}"), masked), source.Token);
+                    }
+
+                if (kept.Count > 0)
+                    Audit.Detail(ctx,
+                        body.Sql + "\n-- kept first: " + string.Join(", ", kept.Select(k => k.Archive)),
+                        body.ConnectionId);
+
                 try
                 {
                     await foreach (var chunk in driver.ExecuteAsync(session, request, source.Token))
@@ -94,6 +180,59 @@ public static class QueryEndpoints
 
             return Results.Empty;
         });
+
+        // --- transactions somebody holds open ----------------------------------------------------
+        // Auto-commit stays the default. This is the other mode: BEGIN, look at what the statements
+        // did, then commit or roll the whole thing back.
+        app.MapPost("/api/tx/begin", async (BeginRequest body, SessionFactory factory,
+            OpenTransactions transactions, CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(body.ConnectionId, ct);
+
+                try
+                {
+                    return Results.Ok(await transactions.BeginAsync(body.ConnectionId, driver, session, ct));
+                }
+                catch
+                {
+                    // Nothing was held, so the session goes straight back rather than leaking a slot.
+                    await session.DisposeAsync();
+                    throw;
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (NotSupportedException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
+        app.MapPost("/api/tx/{id}/commit", async (string id, HttpContext ctx,
+            OpenTransactions transactions) =>
+        {
+            Audit.Detail(ctx, $"commit transaction {id}", transactions.Find(id)?.ConnectionId);
+
+            return await transactions.CommitAsync(id)
+                ? Results.Ok(new { committed = true })
+                : Results.NotFound(new { message = "this transaction is not open any more" });
+        });
+
+        app.MapPost("/api/tx/{id}/rollback", async (string id, HttpContext ctx,
+            OpenTransactions transactions) =>
+        {
+            Audit.Detail(ctx, $"roll back transaction {id}", transactions.Find(id)?.ConnectionId);
+
+            return await transactions.RollbackAsync(id)
+                ? Results.Ok(new { rolledBack = true })
+                : Results.NotFound(new { message = "this transaction is not open any more" });
+        });
+
+        // What is open right now, so a transaction cannot be forgotten quietly.
+        app.MapGet("/api/tx", (OpenTransactions transactions) => Results.Ok(new
+        {
+            idleTimeoutSeconds = (int)transactions.IdleTimeout.TotalSeconds,
+            open = transactions.All(),
+        }));
 
         // The schedule, what it last did, and a way to run one now. Absent state rather than an
         // error when no schedule file is configured: the UI can ask without knowing.

@@ -60,6 +60,33 @@ try {
   throw e;
 }
 
+// Installable as an app: a manifest the browser accepted, and a service worker that registered.
+// Both come out of web/public, which a build has to copy — this is where forgetting that shows up.
+const installable = await page.evaluate(async () => {
+  const link = document.querySelector('link[rel="manifest"]');
+  const manifest = link ? await (await fetch(link.getAttribute("href"))).json() : null;
+  const worker = await navigator.serviceWorker?.getRegistration();
+
+  return {
+    display: manifest?.display ?? null,
+    icons: manifest?.icons?.length ?? 0,
+    worker: worker?.active?.state ?? null,
+  };
+});
+
+// The ICO is what Windows puts on a window and in the task bar; without it an app window wears the
+// browser's icon.
+const ico = await page.request.get(`${baseUrl}/favicon.ico`);
+if (!ico.ok()) {
+  console.error(`no favicon.ico: ${ico.status()}`);
+  process.exit(1);
+}
+
+if (installable.display !== "standalone" || installable.icons < 2 || installable.worker === null) {
+  console.error(`not installable: ${JSON.stringify(installable)}`);
+  process.exit(1);
+}
+
 await page.screenshot({ path: "smoke.png", fullPage: false });
 await browser.close();
 

@@ -1,0 +1,168 @@
+using WebDataStudio.Server.Services;
+using WebDataStudio.Server.Storage;
+
+namespace WebDataStudio.Server.Tests.Storage;
+
+/// The URL a storage connection is configured with. One engine id, four schemes, credentials
+/// optional — because a deployment that has to carry a key for its own storage account is carrying a
+/// secret it did not need.
+public class StorageUrlTests
+{
+    [Theory]
+    [InlineData("s3://bucket")]
+    [InlineData("azblob://account/container")]
+    [InlineData("gs://bucket")]
+    [InlineData("file:///data/incoming")]
+    public void The_four_schemes_are_storage(string url)
+    {
+        Assert.True(StorageUrl.IsStorageScheme(new Uri(url).Scheme));
+        Assert.NotNull(StorageUrl.Parse(url));
+    }
+
+    [Theory]
+    [InlineData("postgres")]
+    [InlineData("redis")]
+    [InlineData("http")]
+    public void Everything_else_is_not(string scheme) =>
+        Assert.False(StorageUrl.IsStorageScheme(scheme));
+
+    [Fact]
+    public void An_s3_url_is_a_bucket_and_a_prefix()
+    {
+        var target = StorageUrl.Parse("s3://lake/exports/2026?region=eu-central-1");
+
+        Assert.Equal(StorageProvider.S3, target.Provider);
+        Assert.Equal("lake", target.Container);
+        Assert.Equal("exports/2026", target.Prefix);
+        Assert.Equal("eu-central-1", target.Option("region"));
+    }
+
+    [Fact]
+    public void An_azure_url_carries_the_account_as_well_as_the_container()
+    {
+        // A storage account has more than one container, so the connection has to say which.
+        var target = StorageUrl.Parse("azblob://mystorage/exports/2026/08");
+
+        Assert.Equal(StorageProvider.AzureBlob, target.Provider);
+        Assert.Equal("mystorage", target.Account);
+        Assert.Equal("exports", target.Container);
+        Assert.Equal("2026/08", target.Prefix);
+    }
+
+    [Fact]
+    public void An_azure_url_without_a_container_is_refused() =>
+        Assert.Throws<FormatException>(() => StorageUrl.Parse("azblob://mystorage"));
+
+    [Fact]
+    public void A_file_url_is_a_path()
+    {
+        var target = StorageUrl.Parse("file:///data/incoming");
+
+        Assert.Equal(StorageProvider.Local, target.Provider);
+        Assert.Equal("/data/incoming", target.Container.Replace('\\', '/'));
+        Assert.Equal("", target.Prefix);
+    }
+
+    [Fact]
+    public void Credentials_are_optional_and_the_target_says_which_it_has()
+    {
+        Assert.False(StorageUrl.Parse("s3://lake?region=eu-central-1").HasExplicitCredentials);
+        Assert.True(StorageUrl.Parse("s3://lake?access=AK&secret=SK").HasExplicitCredentials);
+        Assert.True(StorageUrl.Parse("azblob://a/c?key=abc").HasExplicitCredentials);
+        Assert.True(StorageUrl.Parse("azblob://a/c?sas=sv=2026").HasExplicitCredentials);
+        Assert.False(StorageUrl.Parse("azblob://a/c").HasExplicitCredentials);
+    }
+
+    [Fact]
+    public void A_prefix_scoped_connection_addresses_keys_inside_it()
+    {
+        var target = StorageUrl.Parse("s3://lake/exports/2026");
+
+        Assert.Equal("exports/2026/orders.parquet", target.KeyOf("orders.parquet"));
+        Assert.Equal("exports/2026/orders.parquet", target.KeyOf("/orders.parquet"));
+    }
+
+    [Fact]
+    public void Something_that_is_not_a_url_says_so() =>
+        Assert.Throws<FormatException>(() => StorageUrl.Parse("just some text"));
+
+    [Fact]
+    public void A_scheme_with_no_bucket_says_so() =>
+        Assert.Throws<FormatException>(() => StorageUrl.Parse("s3:///prefix"));
+
+    [Fact]
+    public void A_plus_in_a_key_survives_the_query_string()
+    {
+        // A base64 account key is full of them, and a query-string parser turns '+' into a space —
+        // which broke the key without saying anything.
+        var target = StorageUrl.Parse("azblob://acct/exports?key=ab+cd/ef==");
+
+        Assert.Equal("ab+cd/ef==", target.Option("key"));
+    }
+
+    [Fact]
+    public void An_azure_connection_string_can_carry_the_account_on_its_own()
+    {
+        // What an Aspire app host hands over: the account name is inside the connection string, so
+        // the URL does not repeat it.
+        var target = StorageUrl.Parse(
+            "azblob:///exports?connectionstring=DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=k+/=");
+
+        Assert.Equal(StorageProvider.AzureBlob, target.Provider);
+        Assert.Null(target.Account);
+        Assert.Equal("exports", target.Container);
+        Assert.Equal("DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=k+/=",
+            target.Option("connectionstring"));
+    }
+
+    [Fact]
+    public void An_azure_url_without_an_account_or_a_connection_string_is_refused() =>
+        Assert.Throws<FormatException>(() => StorageUrl.Parse("azblob:///exports"));
+
+    [Fact]
+    public void An_aspire_style_url_survives_the_connection_registry()
+    {
+        // What WithBlobStorage writes into WDS_CONN_EXPORTS. It passes through Uri parsing twice —
+        // once to work out the engine, once in the driver — and the account key must come out the
+        // other side unchanged.
+        const string url =
+            "azblob:///exports?connectionstring=DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=k+/=";
+
+        var uri = new Uri(url);
+
+        Assert.Equal("storage", ConnectionUrl.EngineFromScheme(uri.Scheme));
+
+        var target = StorageUrl.Parse(ConnectionUrl.ToAdoConnectionString("storage", uri));
+
+        Assert.Equal("exports", target.Container);
+        Assert.Equal("DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=k+/=",
+            target.Option("connectionstring"));
+    }
+
+    [Theory]
+    [InlineData("s3://lake/exports?access=a&secret=b", "lake/exports")]
+    [InlineData("azblob://acct/exports?key=secret", "acct/exports")]
+    [InlineData("gs://lake?credentials=%7B%7D", "lake")]
+    public void A_bucket_in_the_connection_list_shows_where_it_points_and_no_secret(
+        string url, string expected)
+    {
+        var spec = new WebDataStudio.Server.Models.ConnectionSpec("id", "LAKE", "storage", url,
+            false, null, null, WebDataStudio.Server.Models.ConnectionSource.Environment);
+
+        var summary = ConnectionRegistry.ToDto(spec).Summary;
+
+        Assert.Equal(expected, summary);
+        foreach (var secret in new[] { "secret", "credentials", "key=" })
+            Assert.DoesNotContain(secret, summary);
+    }
+
+    [Fact]
+    public void And_a_local_folder_shows_its_path()
+    {
+        var spec = new WebDataStudio.Server.Models.ConnectionSpec("id", "DROP", "storage",
+            "file:///data/incoming", false, null, null,
+            WebDataStudio.Server.Models.ConnectionSource.Environment);
+
+        Assert.Equal("/data/incoming", ConnectionRegistry.ToDto(spec).Summary);
+    }
+}

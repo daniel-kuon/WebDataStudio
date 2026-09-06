@@ -6,10 +6,12 @@ import { IconChevronDown, IconChevronRight, IconRefresh, IconSearch } from "@tab
 import { listConnections, listDrivers, listSchema, type Connection, type SchemaNodeDto } from "../api";
 import { nodeIcon } from "./nodeIcons";
 import { ObjectSearch } from "./ObjectSearch";
+import { HealthDot } from "./HealthDot";
 import { schemaCache } from "../editor/schemaCache";
 import {
   actionsFor, connectionActions, type ContextItem, type ExplorerAction, type MenuCapabilities,
 } from "./contextActions";
+import { dragHasFiles, dropKindFor, filesOf, type DropKind } from "./dropTarget";
 
 export type { ExplorerAction } from "./contextActions";
 
@@ -20,7 +22,9 @@ export interface ExplorerSelection { connectionId: string; node: SchemaNodeDto }
 const INDENT = 16;
 
 // Actions that only make sense on a real object, not on a folder.
-const OBJECT_KINDS = ["Table", "View", "MaterializedView"];
+// A double-click opens the rows. A file in a bucket belongs here too: it is a table that happens
+// to live somewhere else.
+const OBJECT_KINDS = ["Table", "View", "MaterializedView", "StorageObject"];
 
 /// The menu opens where the pointer is. Anchoring it to the row would put it at the row's right
 /// edge — the full width of the explorer away from the click that asked for it.
@@ -62,10 +66,16 @@ function ContextMenu({ items, at, onClose, onPick }: {
 }
 
 // One lazily loaded level. Children are fetched on first expand and cached until a refresh.
-function TreeLevel({ conn, parent, depth, caps, onSelect, onAction }: {
+function TreeLevel({ conn, parent, depth, caps, refresh, onSelect, onAction, onDropFiles }: {
   conn: string; parent?: string; depth: number; caps: MenuCapabilities;
+  /// Bumped when something changed the database. Every open level reloads; which levels are open
+  /// stays exactly as it was, because a tree that collapses itself after every change is a tree
+  /// somebody has to walk down again each time.
+  refresh: number;
   onSelect: (s: ExplorerSelection) => void;
   onAction: (action: ExplorerAction, s: ExplorerSelection) => void;
+  /// Files dropped on a node, and what that node makes of them.
+  onDropFiles?: (kind: DropKind, s: ExplorerSelection, files: File[]) => void;
 }) {
   const [nodes, setNodes] = useState<SchemaNodeDto[] | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -82,7 +92,11 @@ function TreeLevel({ conn, parent, depth, caps, onSelect, onAction }: {
       .then(n => { if (!cancelled) setNodes(n); })
       .catch(e => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [conn, parent, nonce]);
+  }, [conn, parent, nonce, refresh]);
+
+  // Which node a file is hovering over, so only that one lights up. Every hook belongs above the
+  // early returns below: a hook that runs only sometimes is React error #310.
+  const [dropOn, setDropOn] = useState<string | null>(null);
 
   const pad = depth * INDENT;
 
@@ -100,13 +114,46 @@ function TreeLevel({ conn, parent, depth, caps, onSelect, onAction }: {
     onAction(action, { connectionId: conn, node });
   };
 
+  // A level that answered with nothing said nothing at all: the chevron opened onto blank space,
+  // and an empty container looked exactly like one that failed to load.
+  if (visible.length === 0)
+    return <Text c="dimmed" size="xs" pl={pad + 8} py={2}>empty</Text>;
+
   return (
     <>
       {visible.map(node => (
         <div key={node.ref}>
           <UnstyledButton
             w="100%" py={2}
-            style={{ paddingLeft: pad + 4, paddingRight: 4 }}
+            style={{
+              paddingLeft: pad + 4,
+              paddingRight: 4,
+              // The node a file would land in, while it is being dragged over it.
+              outline: dropOn === node.ref ? "1px dashed var(--mantine-color-blue-5)" : undefined,
+              background: dropOn === node.ref
+                ? "var(--mantine-color-blue-light)"
+                : undefined,
+            }}
+            onDragOver={e => {
+              if (!dragHasFiles(e.dataTransfer) || dropKindFor(node.kind) === null) return;
+
+              // Only a node that can take the file: everything else keeps the browser's "no".
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              if (dropOn !== node.ref) setDropOn(node.ref);
+            }}
+            onDragLeave={() => setDropOn(current => (current === node.ref ? null : current))}
+            onDrop={e => {
+              const kind = dropKindFor(node.kind);
+              const files = filesOf(e.dataTransfer).filter(file => file.size > 0 || file.name);
+
+              setDropOn(null);
+              if (kind === null || files.length === 0) return;
+
+              e.preventDefault();
+              onSelect({ connectionId: conn, node });
+              onDropFiles?.(kind, { connectionId: conn, node }, files);
+            }}
             onClick={() => {
               if (node.hasChildren) setOpen(o => ({ ...o, [node.ref]: !o[node.ref] }));
               onSelect({ connectionId: conn, node });
@@ -138,8 +185,8 @@ function TreeLevel({ conn, parent, depth, caps, onSelect, onAction }: {
               marginLeft: pad + 10,
               borderLeft: "1px solid var(--mantine-color-default-border)",
             }}>
-              <TreeLevel conn={conn} parent={node.ref} depth={1} caps={caps}
-                onSelect={onSelect} onAction={onAction} />
+              <TreeLevel conn={conn} parent={node.ref} depth={1} caps={caps} refresh={refresh}
+                onSelect={onSelect} onAction={onAction} onDropFiles={onDropFiles} />
             </div>
           )}
         </div>
@@ -156,9 +203,15 @@ function TreeLevel({ conn, parent, depth, caps, onSelect, onAction }: {
   );
 }
 
-export function ExplorerTree({ onSelect, onAction }: {
+export function ExplorerTree({ refresh = 0, onSelect, onAction, onDropFiles }: {
+  /// Bumped by the shell when a change was applied. The tree reloads what is open rather than
+  /// starting over: an applied statement used to collapse everything somebody had opened.
+  refresh?: number;
   onSelect: (s: ExplorerSelection) => void;
   onAction: (action: ExplorerAction, s: ExplorerSelection) => void;
+  /// A file dragged onto a node: into a bucket folder as an upload, into a table as rows, into a
+  /// schema as a new table. The tree knows what every node is, so this needs no dialog to ask.
+  onDropFiles?: (kind: DropKind, s: ExplorerSelection, files: File[]) => void;
 }) {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [capsByEngine, setCapsByEngine] = useState<Record<string, MenuCapabilities>>({});
@@ -173,7 +226,8 @@ export function ExplorerTree({ onSelect, onAction }: {
   // Two characters: one is a typo waiting to happen and would search the whole server for "a".
   const searching = filter.trim().length >= 2;
 
-  useEffect(() => { listConnections().then(setConnections).catch(() => setConnections([])); }, [nonce]);
+  useEffect(() => { listConnections().then(setConnections).catch(() => setConnections([])); },
+    [nonce, refresh]);
 
   // What each engine can do decides which menu items exist at all.
   useEffect(() => {
@@ -184,6 +238,7 @@ export function ExplorerTree({ onSelect, onAction }: {
           ddl: driver.caps.ddl,
           multiDatabase: driver.caps.multiDatabase,
           fullTextIndexes: driver.caps.fullTextIndexes,
+          browseContainers: driver.caps.browseContainers,
         } satisfies MenuCapabilities,
       ]))))
       .catch(() => setCapsByEngine({}));
@@ -239,7 +294,7 @@ export function ExplorerTree({ onSelect, onAction }: {
           ) : null}
 
           {!closedGroups[group] && list.map(c => (
-            <div key={`${c.id}-${nonce}`}>
+            <div key={c.id}>
               <UnstyledButton w="100%" px={4} py={3} pl={group ? 14 : 4}
                 onClick={() => {
                   // Selecting it too, not just expanding: the toolbar's buttons act on "the
@@ -259,6 +314,8 @@ export function ExplorerTree({ onSelect, onAction }: {
                 } : undefined}>
                 <Group gap={4} wrap="nowrap">
                   {open[c.id] ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+                  {/* Whether the server is answering, and how far away it is. */}
+                  <HealthDot id={c.id} auto={open[c.id] === true} />
                   <Text size="xs" fw={600} c={c.color ?? undefined} truncate>{c.name}</Text>
                   {c.readOnly && <Badge size="xs" variant="light" color="orange">RO</Badge>}
                   {c.tunnelled && <Badge size="xs" variant="light" color="blue">SSH</Badge>}
@@ -271,7 +328,8 @@ export function ExplorerTree({ onSelect, onAction }: {
                   borderLeft: "1px solid var(--mantine-color-default-border)",
                 }}>
                   <TreeLevel conn={c.id} depth={1} caps={capsByEngine[c.engine] ?? {}}
-                    onSelect={onSelect} onAction={onAction} />
+                    refresh={nonce + refresh}
+                    onSelect={onSelect} onAction={onAction} onDropFiles={onDropFiles} />
                 </div>
               )}
             </div>

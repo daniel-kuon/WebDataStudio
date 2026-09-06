@@ -10,10 +10,12 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # The published version, passed in by CI so the studio can show which build it is running.
 ARG WDS_BUILD=0
 ARG WDS_COMMIT=local
+# Set when the image is built from a tag: then the tag is the version, not the run number.
+ARG WDS_VERSION=
 
 WORKDIR /src
 COPY . .
-RUN dotnet publish src/WebDataStudio.Server -c Release -o /app     -p:WdsBuild=$WDS_BUILD -p:WdsCommit=$WDS_COMMIT
+RUN dotnet publish src/WebDataStudio.Server -c Release -o /app     -p:WdsBuild=$WDS_BUILD -p:WdsCommit=$WDS_COMMIT -p:WdsVersion=$WDS_VERSION
 
 # ---- runtime --------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
@@ -47,6 +49,13 @@ https://repo.mongodb.org/apt/debian bookworm/mongodb-org/8.0 main" \
 
 WORKDIR /app
 COPY --from=build /app .
+
+# DuckDB reads s3://, az:// and gs:// through its httpfs and azure extensions, and INSTALL
+# needs the internet, which a container in a private network does not have. They are staged
+# here, once, by the application's own DuckDB, so the versions match by construction and no
+# session ever downloads anything. About 60 MB, and the price of storage working offline.
+ENV WDS_DUCKDB_EXTENSION_DIR=/opt/duckdb/extensions
+RUN dotnet WebDataStudio.Server.dll --install-storage-extensions
 
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080 \
     DB_PATH=/data/webdatastudio.db

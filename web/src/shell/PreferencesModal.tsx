@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
-  ActionIcon, Alert, Button, Group, Kbd, Modal, NumberInput, ScrollArea, Stack, Switch, Table, Tabs,
-  Text, Tooltip,
+  ActionIcon, Alert, Button, Group, Kbd, Modal, NumberInput, ScrollArea, Select, Stack, Switch,
+  Table, Tabs, Text, Tooltip,
 } from "@mantine/core";
 import { IconKeyboard, IconRotate } from "@tabler/icons-react";
 import type { Command } from "./commands";
@@ -51,6 +51,11 @@ export function PreferencesModal({ commands, opened, onClose }: {
               step={20} value={prefs.pageSize}
               onChange={value => store({ pageSize: Math.max(20, Number(value) || 200) })} />
 
+            <Switch size="xs" checked={prefs.inspectBeforeRun}
+              label="Read a statement before running it"
+              description="Says what it noticed — an UPDATE with no WHERE, an accidental cross product. It never refuses."
+              onChange={e => store({ inspectBeforeRun: e.currentTarget.checked })} />
+
             <Switch size="xs" checked={prefs.historySnapshots}
               label="Keep the result with each history entry"
               description="A snapshot is a copy of the data in the workspace database. Off by default."
@@ -59,6 +64,23 @@ export function PreferencesModal({ commands, opened, onClose }: {
             <NumberInput size="xs" w={180} label="Rows a snapshot keeps" min={10} max={2000} step={10}
               disabled={!prefs.historySnapshots} value={prefs.snapshotRows}
               onChange={value => store({ snapshotRows: Math.max(10, Number(value) || 200) })} />
+
+            <Select size="xs" w={220} label="Show timestamps in" allowDeselect={false}
+              description="Only what is shown. A value with no zone of its own is never converted."
+              data={[
+                { value: "local", label: "this computer's zone" },
+                { value: "utc", label: "UTC" },
+                { value: "Europe/Berlin", label: "Europe/Berlin" },
+                { value: "Europe/London", label: "Europe/London" },
+                { value: "America/New_York", label: "America/New_York" },
+              ]}
+              value={prefs.timeZone}
+              onChange={value => store({ timeZone: value ?? "local" })} />
+
+            <NumberInput size="xs" w={220} label="Tell me when a query takes longer than" min={0}
+              max={3600} step={10} suffix=" s" value={prefs.notifyAfterSeconds}
+              description="Only while you are looking at something else. 0 switches it off."
+              onChange={value => store({ notifyAfterSeconds: Math.max(0, Number(value) || 0) })} />
           </Stack>
         </Tabs.Panel>
 

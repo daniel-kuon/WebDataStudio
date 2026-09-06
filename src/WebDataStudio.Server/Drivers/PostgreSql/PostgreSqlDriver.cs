@@ -20,6 +20,9 @@ public sealed class PostgreSqlDriver : AdoDriverBase
         Backup = true, Restore = true,
         UserManagement = true, SessionList = true, KillSession = true, ServerStats = true,
         SlowQueryLog = true, SystemCommands = true,
+        // pg_cron, where it is installed. Without the extension the list is empty and the panel
+        // says which scheduler it looked for.
+        Jobs = true,
         ActivityProgress = true, Replication = true,
     };
 
@@ -33,17 +36,19 @@ public sealed class PostgreSqlDriver : AdoDriverBase
     }
 
     public override async Task<IReadOnlyList<SchemaNode>> IntrospectAsync(
-        IDbSession session, SchemaNodeRef? parent, CancellationToken ct)
+        IDbSession session, SchemaNodeRef? parent, CancellationToken ct, bool systemObjects = false)
     {
         if (parent is null)
         {
+            var visible = systemObjects
+                ? "true"
+                : """
+                  nspname NOT IN ('pg_catalog','information_schema')
+                    AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'
+                  """;
+
             var schemas = await QueryNodesAsync(session, ct,
-                """
-                SELECT nspname FROM pg_namespace
-                 WHERE nspname NOT IN ('pg_catalog','information_schema')
-                   AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'
-                 ORDER BY nspname
-                """,
+                $"SELECT nspname FROM pg_namespace WHERE {visible} ORDER BY nspname",
                 name => new SchemaNode(new SchemaNodeRef(SchemaNodeKind.Schema, [name]), name, true));
 
             // Below the schemas, the lists a database has one of. They sit at the same level
@@ -236,9 +241,11 @@ public sealed class PostgreSqlDriver : AdoDriverBase
         long? rows = null;
         long? size = null;
         string? comment = null;
+        var partitioned = false;
         await using (var cmd = Command(session,
             """
-            SELECT c.reltuples::bigint, pg_total_relation_size(c.oid), obj_description(c.oid)
+            SELECT c.reltuples::bigint, pg_total_relation_size(c.oid), obj_description(c.oid),
+                   c.relkind = 'p'
               FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
              WHERE n.nspname = @s AND c.relname = @t
             """, schema, name))
@@ -249,10 +256,12 @@ public sealed class PostgreSqlDriver : AdoDriverBase
                 rows = reader.IsDBNull(0) ? null : reader.GetInt64(0);
                 size = reader.IsDBNull(1) ? null : reader.GetInt64(1);
                 comment = reader.IsDBNull(2) ? null : reader.GetString(2);
+                partitioned = !reader.IsDBNull(3) && reader.GetBoolean(3);
             }
         }
 
-        return new ObjectDetail(target, columns, indexes, foreignKeys, triggers, rows, size, comment, null);
+        return new ObjectDetail(target, columns, indexes, foreignKeys, triggers, rows, size, comment,
+            null, partitioned);
     }
 
     public override Task<AnalyzeReport> AnalyzeAsync(IDbSession session, AnalyzeScope scope,

@@ -3,21 +3,20 @@ import { DockviewReact } from "dockview-react";
 import type { DockviewApi, DockviewReadyEvent, DockviewGroupPanel, IDockviewPanelProps } from "dockview-react";
 import { ActionIcon, Group, Modal, Text, Tooltip } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import {
-  IconArchive, IconArrowsJoin, IconBinaryTree, IconNotebook,
-  IconBookmarks, IconCommand, IconGitCompare, IconHistory, IconKey, IconLayoutBoard,
-  IconSettingsCog, IconSitemap, IconSquarePlus, IconTable,
-} from "@tabler/icons-react";
+import { IconBookmarks, IconSquarePlus, IconZoomCode } from "@tabler/icons-react";
+import { useNavigate } from "react-router-dom";
 import "dockview-react/dist/styles/dockview.css";
 import "../editor/dockview-mantine.css";
 import { useAppTheme } from "../ThemeProvider";
 import { FederationPanel } from "../federate/FederationPanel";
 import { PerspectivePanel } from "../perspective/PerspectivePanel";
 import { ArchivePanel } from "../archive/ArchivePanel";
+import { DashboardPanel } from "../dashboard/DashboardPanel";
 import { ArchiveDialog, type ArchiveTarget } from "../archive/KeepArchiveButton";
 import { NotebookPanel } from "../notebook/NotebookPanel";
 import { isAdmin, useRole } from "../auth/useRole";
 import { ExplorerTree, type ExplorerAction, type ExplorerSelection } from "../explorer/ExplorerTree";
+import type { DropKind } from "../explorer/dropTarget";
 import { ObjectDetailPanel } from "../explorer/ObjectDetailPanel";
 import { QueryTab } from "../query/QueryTab";
 import { DataTab, foreignKeyRef, type FkNavMode } from "../data/DataTab";
@@ -27,12 +26,17 @@ import { TableDesigner } from "../designer/TableDesigner";
 import { DiagramPanel } from "../diagram/DiagramPanel";
 import { AdminPanel } from "../admin/AdminPanel";
 import { ComparePanel } from "../compare/ComparePanel";
+import { DataSearchPanel } from "../explorer/DataSearchPanel";
 import { QueryDesigner } from "../designer/QueryDesigner";
 import { RedisPanel } from "../redis/RedisPanel";
+import { NotifyPanel } from "../notify/NotifyPanel";
 import { parseModel } from "../designer/buildSelect";
 import { SavedQueriesPanel } from "../query/SavedQueriesPanel";
 import { SnippetManager } from "../editor/SnippetManager";
 import { CommandPalette, ShortcutsHelp } from "../shell/CommandPalette";
+import { ToolsMenu } from "../shell/ToolsMenu";
+import { emit, onShell, publishShell } from "../shell/bus";
+import { type ToolComponent } from "../shell/tools";
 import { PreferencesModal } from "../shell/PreferencesModal";
 import { comboOf, loadPreferences, preferences } from "../shell/preferences";
 import { StudioTab, TabPinsProvider, type TabPins } from "./StudioTab";
@@ -43,18 +47,29 @@ import { buildDeepLink, parseDeepLink } from "../shell/deepLink";
 import { GoToObject } from "../shell/GoToObject";
 import { NewDatabaseDialog, DropDatabaseDialog, type DatabaseTarget } from "../explorer/DatabaseDialogs";
 import { PropertiesDialog } from "../explorer/PropertiesDialog";
+import { DataDictionaryModal } from "../explorer/DataDictionaryModal";
 import { GrantDialog, type GrantTarget } from "../explorer/GrantDialog";
 import {
   dropColumn, dropConstraint, dropIndex, executeRoutine, rebuildIndex,
   selectColumn,
 } from "../sql/objectScripts";
 import {
-  applyDdl, describeObject, listConnections, loadTabs, loadWorkspaceItem, previewRename,
-  refreshStatement, saveTabs, saveWorkspaceItem,
-  type BrowseFilter, type Connection, type ForeignKeyDto, type ReferencingKeyDto,
+  applyDdl, archiveUrl, deleteObject, describeObject, listConnections, loadTabs, loadWorkspaceItem,
+  objectUrl, previewObject,
+  previewRename, previewComment, previewDrop, previewSchemaChange, previewTriggerState,
+  refreshStatement, saveTabs, saveWorkspaceItem, uploadObject,
+  type BrowseFilter, type Connection, type ForeignKeyDto, type DependencyReportDto,
+  type ReferencingKeyDto,
 } from "../api";
 import { ExportDialog, type ExportTarget } from "../export/ExportDialog";
 import { CopyTableDialog, ImportDialog, type ImportTarget } from "../import/ImportDialog";
+import { NewTableDialog } from "../import/NewTableDialog";
+import { SubsetDialog } from "../export/SubsetDialog";
+import { ScriptConfirm, type PendingScript } from "../ddl/ScriptConfirm";
+import { ObjectEditor, type ObjectEditorTarget, type EditableKind } from "../ddl/ObjectEditor";
+import { SequenceDialog, type SequenceTarget } from "../ddl/SequenceDialog";
+import { saveAs } from "../storage/saveAs";
+import { FileViewerModal, type ViewableFile } from "../storage/FileViewerModal";
 import type { DialectId } from "../sql/splitStatements";
 
 interface TabState {
@@ -69,6 +84,8 @@ interface DataTabState {
   id: string; connectionId: string; objectRef: string; tableName: string; foreignKeys: ForeignKeyDto[];
   /// Filters the tab opens with — how a followed foreign key lands on the referenced rows.
   initialFilters?: BrowseFilter[];
+  /// Where the tab opens already filtered — a hit from the data search.
+  filter?: { column: string; value: string } | null;
 }
 
 interface ShellState {
@@ -88,7 +105,9 @@ interface ShellState {
   fkNavMode: FkNavMode;
   setFkNavMode: (mode: FkNavMode) => void;
   runStatement: (connectionId: string, sql: string) => void;
-  openData: (connectionId: string, objectRef: string, tableName: string) => void;
+  openData: (connectionId: string, objectRef: string, tableName: string,
+    options?: { filters?: BrowseFilter[]; filter?: { column: string; value: string };
+                splitFrom?: string }) => void;
   dialectOf: (connectionId: string) => DialectId;
   // The explorer is a dock panel like any other, so it can be dragged, split off or closed. What
   // it needs from the shell travels through here instead of through props.
@@ -97,6 +116,9 @@ interface ShellState {
     activeConnection: string;
     select: (selection: ExplorerSelection) => void;
     action: (action: ExplorerAction, selection: ExplorerSelection) => void;
+    /// Files dragged onto a node: the node decides whether that is an upload, an import or a new
+    /// table.
+    dropFiles: (kind: DropKind, selection: ExplorerSelection, files: File[]) => void;
     newQuery: () => void;
     focusPanel: (id: string) => void;
     openTool: (component: string, title: string, connectionId: string) => void;
@@ -122,6 +144,9 @@ function StructurePanel() {
 
   return (
     <ObjectDetailPanel selection={shell.selection}
+      // A file in a bucket offers its rows from the panel, where a reader understands it.
+      onOpenData={selection =>
+        shell.openData(selection.connectionId, selection.node.ref, selection.node.label)}
       // The SQL tab and the privilege statements open a query tab rather than running anything:
       // a GRANT goes through the editor's preview like every other change.
       onOpenInEditor={sql => shell.selection
@@ -165,6 +190,9 @@ function DataPanel(props: IDockviewPanelProps<{ tabId: string }>) {
       initialFilters={tab.initialFilters}
       fkNavMode={shell.fkNavMode}
       onFkNavModeChange={shell.setFkNavMode}
+      initialFilter={tab.filter ?? null}
+      // The flatten of a JSON column is SQL, so it goes to a query tab rather than running here.
+      onOpenInEditor={sql => shell.runStatement(tab.connectionId, sql)}
       onFollowForeignKey={(fk, value) => shell.followForeignKey(tab, fk, value)}
       onOpenReferencing={(key, values) => shell.openReferencing(tab, key, values)}
       onExport={() => shell.exportObject(tab.connectionId, tab.objectRef, tab.tableName)} />
@@ -201,8 +229,12 @@ function HistoryDockPanel() {
   const shell = useShell();
   const connectionId = shell.selection?.connectionId ?? shell.tabs[0]?.connectionId ?? "";
 
-  return <HistoryPanel onOpen={entry =>
-    shell.runStatement(entry.connectionId || connectionId, entry.sql)} />;
+  return (
+    <HistoryPanel connectionId={connectionId || undefined}
+      onOpen={entry => shell.runStatement(entry.connectionId || connectionId, entry.sql)}
+      // A statement from the statistics opens as a query rather than running by itself.
+      onOpenSql={sql => shell.runStatement(connectionId, sql)} />
+  );
 }
 
 function SavedQueriesDockPanel() {
@@ -243,6 +275,16 @@ function RedisDockPanel(
   );
 }
 
+function NotifyDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) {
+  const shell = useShell();
+  const [connection, setConnection] = useState(props.params.connectionId);
+
+  return (
+    <NotifyPanel connections={shell.connections} connectionId={connection}
+      onConnectionChange={setConnection} />
+  );
+}
+
 function FederationDockPanel() {
   const shell = useShell();
   return <FederationPanel connections={shell.connections} />;
@@ -260,6 +302,13 @@ function ArchiveDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) 
   );
 }
 
+function DashboardDockPanel() {
+  const shell = useShell();
+
+  // A tile hands its statement to a query tab, which is where anything beyond looking happens.
+  return <DashboardPanel onOpenInEditor={(connectionId, sql) => shell.runStatement(connectionId, sql)} />;
+}
+
 function NotebookDockPanel(props: IDockviewPanelProps<{ connectionId?: string }>) {
   const shell = useShell();
   return <NotebookPanel connections={shell.connections} connectionId={props.params.connectionId} />;
@@ -270,8 +319,31 @@ function DiagramDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) 
   return <DiagramPanel connectionId={props.params.connectionId} onOpenTable={shell.openData} />;
 }
 
-function AdminDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) {
-  return <AdminPanel connectionId={props.params.connectionId} />;
+function AdminDockPanel(props: IDockviewPanelProps<{ connectionId: string; tab?: string }>) {
+  const shell = useShell();
+
+  return (
+    <AdminPanel connectionId={props.params.connectionId}
+      // "Scheduled jobs" and "Capture" are commands of their own, so they land on their tab rather
+      // than on the overview with a hunt to follow.
+      tab={props.params.tab}
+      // A job is enabled, disabled or started through a statement in a query tab — the same path
+      // every other change in this studio takes.
+      onOpenInEditor={sql => shell.runStatement(props.params.connectionId, sql)} />
+  );
+}
+
+function DataSearchDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) {
+  const shell = useShell();
+
+  return (
+    <DataSearchPanel connectionId={props.params.connectionId}
+      // A hit opens the table it is in, so the next question — which row? — is one click away.
+      onOpen={(table, schema, column, value) =>
+        shell.openData(props.params.connectionId,
+          schema ? `Table:${schema}/${table}` : `Table:${table}`, table,
+          { filter: { column, value } })} />
+  );
 }
 
 function CompareDockPanel(props: IDockviewPanelProps<{ connectionId: string }>) {
@@ -289,120 +361,70 @@ function WelcomePanel() {
 function ExplorerDockPanel() {
   const { explorer } = useShell();
   const connection = explorer.activeConnection;
-  // The administration surface belongs to admins; the server refuses it for anybody else, so
-  // offering the button would only be a promise it cannot keep.
-  const role = useRole();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* Three things that act on what is in front of you, and every tool behind one menu. This
+          used to be thirteen icons in a 280-pixel column, cut off at the panel's edge. */}
       <Group gap={2} px={4} pt={4} wrap="nowrap">
-        <Tooltip label="New query">
+        <Tooltip label="New query (Ctrl+N)">
           <ActionIcon size="sm" variant="subtle" aria-label="New query" disabled={!connection}
             onClick={explorer.newQuery}>
             <IconSquarePlus size={15} />
           </ActionIcon>
         </Tooltip>
-        <Tooltip label="History">
-          <ActionIcon size="sm" variant="subtle" aria-label="History"
-            onClick={() => explorer.focusPanel("history")}>
-            <IconHistory size={15} />
+        <Tooltip label="Find a value in any table">
+          <ActionIcon size="sm" variant="subtle" aria-label="Find data" disabled={!connection}
+            onClick={() => explorer.openTool("datasearch", "Find data", connection)}>
+            <IconZoomCode size={15} />
           </ActionIcon>
         </Tooltip>
-        <Tooltip label="Diagram">
-          <ActionIcon size="sm" variant="subtle" aria-label="Diagram" disabled={!connection}
-            onClick={() => explorer.openTool("diagram", "Diagram", connection)}>
-            <IconSitemap size={15} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Compare">
-          <ActionIcon size="sm" variant="subtle" aria-label="Compare" disabled={!connection}
-            onClick={() => explorer.openTool("compare", "Compare", connection)}>
-            <IconGitCompare size={15} />
-          </ActionIcon>
-        </Tooltip>
-        {isAdmin(role) ? (
-          <Tooltip label="Administration">
-            <ActionIcon size="sm" variant="subtle" aria-label="Administration" disabled={!connection}
-              onClick={() => explorer.openTool("admin", "Admin", connection)}>
-              <IconSettingsCog size={15} />
-            </ActionIcon>
-          </Tooltip>
-        ) : null}
-        <Tooltip label="Notebook: SQL, prose and results in one document">
-          <ActionIcon size="sm" variant="subtle" aria-label="Notebook"
-            onClick={() => explorer.openTool("notebook", "Notebook", connection)}>
-            <IconNotebook size={15} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Archives: results kept as files">
-          <ActionIcon size="sm" variant="subtle" aria-label="Archives" disabled={!connection}
-            onClick={() => explorer.openTool("archive", "Archives", connection)}>
-            <IconArchive size={15} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Perspective: a row, and everything related to it">
-          <ActionIcon size="sm" variant="subtle" aria-label="Perspective" disabled={!connection}
-            onClick={() => explorer.openTool("perspective", "Perspective", connection)}>
-            <IconBinaryTree size={15} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Join across connections">
-          <ActionIcon size="sm" variant="subtle" aria-label="Federated query"
-            disabled={!connection}
-            onClick={() => explorer.openTool("federate", "Federated", connection)}>
-            <IconArrowsJoin size={15} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Query builder">
-          <ActionIcon size="sm" variant="subtle" aria-label="Query builder" disabled={!connection}
-            onClick={() => explorer.openTool("builder", "Builder", connection)}>
-            <IconTable size={15} />
-          </ActionIcon>
-        </Tooltip>
-        {/* Only for Redis: a key browser on PostgreSQL would be a button that cannot work. */}
-        {explorer.engineOf(connection) === "redis" ? (
-          <Tooltip label="Redis browser">
-            <ActionIcon size="sm" variant="subtle" aria-label="Redis browser"
-              onClick={() => explorer.openTool("redis", "Redis", connection)}>
-              <IconKey size={15} />
-            </ActionIcon>
-          </Tooltip>
-        ) : null}
         <Tooltip label="Saved queries">
           <ActionIcon size="sm" variant="subtle" aria-label="Saved queries"
             onClick={() => explorer.focusPanel("saved")}>
             <IconBookmarks size={15} />
           </ActionIcon>
         </Tooltip>
-        <Tooltip label="Layout presets">
-          <ActionIcon size="sm" variant="subtle" aria-label="Layout presets"
-            onClick={explorer.openLayouts}>
-            <IconLayoutBoard size={15} />
-          </ActionIcon>
-        </Tooltip>
-        <Tooltip label="Command palette (Ctrl+K)">
-          <ActionIcon size="sm" variant="subtle" aria-label="Command palette"
-            onClick={explorer.openPalette}>
-            <IconCommand size={15} />
-          </ActionIcon>
-        </Tooltip>
+        <ToolsMenu />
       </Group>
 
       <div style={{ flex: 1, minHeight: 0 }}>
-        <ExplorerTree key={explorer.nonce} onSelect={explorer.select} onAction={explorer.action} />
+        <ExplorerTree refresh={explorer.nonce} onSelect={explorer.select} onAction={explorer.action}
+          onDropFiles={explorer.dropFiles} />
       </div>
     </div>
   );
 }
 
+/// A dock panel, however much of its params it reads: some take the connection from them, the
+/// always-there panels take everything from the shell.
+type DockPanel = React.FunctionComponent<IDockviewPanelProps<Record<string, unknown>>>;
+
+/// Every tool in `tools.ts` needs a panel here. Typing the map by `ToolComponent` is what makes a
+/// tool nobody wired up a compile error rather than a menu entry that does nothing.
+const toolComponents: Record<ToolComponent, DockPanel> = {
+  datasearch: DataSearchDockPanel as DockPanel,
+  diagram: DiagramDockPanel as DockPanel,
+  builder: QueryDesignerDockPanel as DockPanel,
+  notebook: NotebookDockPanel as DockPanel,
+  perspective: PerspectiveDockPanel as DockPanel,
+  compare: CompareDockPanel as DockPanel,
+  federate: FederationDockPanel as DockPanel,
+  archive: ArchiveDockPanel as DockPanel,
+  redis: RedisDockPanel as DockPanel,
+  notify: NotifyDockPanel as DockPanel,
+  admin: AdminDockPanel as DockPanel,
+  health: HealthDockPanel as DockPanel,
+  history: HistoryDockPanel as DockPanel,
+  saved: SavedQueriesDockPanel as DockPanel,
+  dashboard: DashboardDockPanel as DockPanel,
+};
+
 const components = {
+  ...toolComponents,
   explorer: ExplorerDockPanel,
-  structure: StructurePanel, query: QueryPanel, history: HistoryDockPanel, welcome: WelcomePanel,
-  data: DataPanel, plan: PlanDockPanel, health: HealthDockPanel, designer: DesignerPanel,
-  diagram: DiagramDockPanel, admin: AdminDockPanel, compare: CompareDockPanel,
-  saved: SavedQueriesDockPanel, builder: QueryDesignerDockPanel, redis: RedisDockPanel,
-  federate: FederationDockPanel, notebook: NotebookDockPanel,
-  perspective: PerspectiveDockPanel, archive: ArchiveDockPanel,
+  structure: StructurePanel, query: QueryPanel, welcome: WelcomePanel,
+  data: DataPanel, plan: PlanDockPanel, designer: DesignerPanel,
 };
 
 /// The default arrangement, in one place: the initial layout and the reset command must produce
@@ -446,9 +468,16 @@ function buildDefaultLayout(
   welcome.api.setActive();
 }
 
-/// Panels a close-everything action must leave alone: the explorer is the way to everything else,
-/// and the start page is what a layout is rebuilt around.
+/// Panels that cannot be closed at all: the explorer is the way to everything else, and the start
+/// page is what a layout is rebuilt around.
 const PROTECTED_PANELS = new Set(["explorer", "welcome"]);
+
+/// The arrangement the studio builds for itself. These can be closed one at a time — somebody who
+/// does not want the plan panel should be able to say so — but a "close everything" leaves them
+/// alone: it is meant for the tabs opened during the session, not for the window's furniture.
+const LAYOUT_PANELS = new Set([
+  "welcome", "explorer", "structure", "plan", "health", "history", "saved",
+]);
 
 /// The orange border on the group a panel lives in. Restarting the animation needs the class off,
 /// a reflow, and the class back on — otherwise activating an already-active panel shows nothing,
@@ -462,6 +491,12 @@ function flashPanel(element: HTMLElement | undefined) {
 }
 
 export function DockShell() {
+  // The administration surface belongs to admins; the server refuses it for anybody else, so the
+  // tools menu leaves it out rather than offering a promise it cannot keep.
+  const role = useRole();
+  // This is a BrowserRouter, so a command that wants another page navigates. Setting
+  // window.location.hash — which is what these did — moved nobody anywhere.
+  const navigate = useNavigate();
   const { current } = useAppTheme();
   const [selection, setSelection] = useState<ExplorerSelection | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -484,7 +519,20 @@ export function DockShell() {
   const [chordOpen, setChordOpen] = useState(false);
   const [exportTarget, setExportTarget] = useState<ExportTarget | null>(null);
   const [importTarget, setImportTarget] = useState<ImportTarget | null>(null);
+  // A file that should simply be a table: an upload, or an object in a bucket.
+  const [newTable, setNewTable] = useState<{
+    connectionId: string;
+    source?: { storageConnection: string; objectRef: string; name: string };
+    /// A file dragged onto a schema, rather than picked in the dialog.
+    dropped?: File | null;
+  } | null>(null);
   const [copySource, setCopySource] = useState<{ connectionId: string; objectRef: string; label: string } | null>(null);
+  // The three steps every object change goes through: edit it, read the statement, run it.
+  const [objectEditor, setObjectEditor] = useState<ObjectEditorTarget | null>(null);
+  const [sequenceTarget, setSequenceTarget] = useState<SequenceTarget | null>(null);
+  const [pendingScript, setPendingScript] = useState<PendingScript | null>(null);
+  const [subsetTarget, setSubsetTarget] = useState<
+    { connectionId: string; schema: string; table: string } | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
@@ -499,6 +547,8 @@ export function DockShell() {
   const [newDatabase, setNewDatabase] = useState<DatabaseTarget | null>(null);
   const [dropDatabaseTarget, setDropDatabaseTarget] = useState<DatabaseTarget | null>(null);
   const [propertiesFor, setPropertiesFor] = useState<{ connectionId: string; label: string } | null>(null);
+  const [dictionaryFor, setDictionaryFor] = useState<{ connectionId: string; label: string } | null>(null);
+  const [viewingFile, setViewingFile] = useState<ViewableFile | null>(null);
   // Held here, not in the modal: the Ctrl+L chord has to reach the same list the modal numbers.
   const { presets, save: savePresets } = useLayoutPresets();
 
@@ -628,13 +678,15 @@ export function DockShell() {
   }, []);
 
   const openData = useCallback(async (connectionId: string, objectRef: string, tableName: string,
-    options?: { filters?: BrowseFilter[]; splitFrom?: string }) => {
+    options?: { filters?: BrowseFilter[]; filter?: { column: string; value: string };
+                splitFrom?: string }) => {
     const detail = await describeObject(connectionId, objectRef).catch(() => null);
     const tab: DataTabState = {
       id: "d" + Date.now().toString(36),
       connectionId, objectRef, tableName,
       foreignKeys: detail?.foreignKeys ?? [],
       initialFilters: options?.filters,
+      filter: options?.filter ?? null,
     };
     setDataTabs(list => [...list, tab]);
 
@@ -667,6 +719,19 @@ export function DockShell() {
   const setFkNavMode = useCallback((mode: FkNavMode) => {
     setFkNavModeState(mode);
     saveWorkspaceItem("fk-nav-mode", mode).catch(() => {});
+  }, []);
+
+  /// Ask the server for the statement, then show it. Nothing has run when this returns — the
+  /// confirmation dialog is what runs it, and only on a click.
+  const preview = useCallback(async (connectionId: string, title: string,
+    build: () => Promise<{ hash: string; script: string; destructive?: boolean;
+                           dependencies?: DependencyReportDto }>) => {
+    try {
+      const built = await build();
+      setPendingScript({ connectionId, title, ...built });
+    } catch (e) {
+      notifications.show({ color: "red", message: e instanceof Error ? e.message : String(e) });
+    }
   }, []);
 
   // Following a foreign key lands on the referenced row itself, not on the whole table — as the
@@ -748,6 +813,44 @@ export function DockShell() {
     flashPanel(api.current?.getPanel(id)?.group.element);
   }, [focusPanel]);
 
+  /// A file dropped on a node in the tree. The node decides what that means, so nothing has to be
+  /// asked first: a bucket folder takes the file as it is, a table takes its rows, and a schema turns
+  /// it into a table of its own.
+  const handleDrop = useCallback((kind: DropKind, s: ExplorerSelection, files: File[]) => {
+    const [file] = files;
+    if (!file) return;
+
+    switch (kind) {
+      case "upload":
+        // Straight up: the dialog would only ask what the drop already said.
+        Promise.all(files.map(one => uploadObject(s.connectionId, s.node.ref, one)))
+          .then(() => {
+            notifications.show({
+              message: files.length === 1
+                ? `${file.name} uploaded to ${s.node.label}`
+                : `${files.length} files uploaded to ${s.node.label}`,
+            });
+            setExplorerNonce(n => n + 1);
+          })
+          .catch(e => notifications.show({ color: "red", message: String(e.message ?? e) }));
+        break;
+
+      case "import":
+        // Into a table that exists: the mapping still needs a person, so the dialog opens with the
+        // file and the table already filled in.
+        setImportTarget({
+          connectionId: s.connectionId,
+          table: qualify(s.connectionId, s.node.ref),
+          file,
+        });
+        break;
+
+      case "new-table":
+        setNewTable({ connectionId: s.connectionId, dropped: file });
+        break;
+    }
+  }, [qualify]);
+
   const handleAction = useCallback(async (action: ExplorerAction, s: ExplorerSelection) => {
     const name = qualify(s.connectionId, s.node.ref);
     const engine = engineOf(s.connectionId);
@@ -767,19 +870,227 @@ export function DockShell() {
         break;
 
       case "open-data":
-        // A Redis key is one value, not a page of rows: it belongs in the key browser. Asking the
-        // data tab for it produced "ERR wrong number of arguments for 'select' command", because
-        // `SELECT * FROM key` is not a thing Redis can be asked.
-        if (engine === "redis") openRedisKey(s.connectionId, s.node.ref);
+        // A single Redis key belongs in the key browser: that is where its value is shown in the
+        // shape its type has, and where it can be edited. A database or a prefix folder is a table
+        // of keys, and the data tab reads it like any other — the driver builds that page itself.
+        if (engine === "redis" && s.node.kind === "Table") openRedisKey(s.connectionId, s.node.ref);
         else await openData(s.connectionId, s.node.ref, s.node.label);
         break;
 
       case "new-query":
+        if (s.node.kind === "StorageObject") {
+          // A file is selected from through a reader, and which one is the server's answer.
+          const object = await previewObject(s.connectionId, s.node.ref);
+
+          if (object.from) newTab(s.connectionId, `SELECT * FROM ${object.from}`);
+          else notifications.show({ color: "red", message: "nothing here reads this file" });
+          break;
+        }
+
         newTab(s.connectionId, `SELECT * FROM ${name}`);
+        break;
+
+      case "import-object":
+        // The file is in one connection and the table goes in another, so the dialog asks which.
+        setNewTable({
+          connectionId: "",
+          source: {
+            storageConnection: s.connectionId, objectRef: s.node.ref, name: s.node.label,
+          },
+        });
+        break;
+
+      case "view-object":
+        setViewingFile({
+          // The inline URL: the same bytes the download serves, without the header that tells the
+          // browser to put them in the downloads folder.
+          url: `${objectUrl(s.connectionId, s.node.ref)}&inline=true`,
+          name: s.node.label,
+        });
+        break;
+
+      case "download-object": {
+        // A download is a link the browser follows; there is nothing for the app to hold.
+        const link = document.createElement("a");
+        link.href = objectUrl(s.connectionId, s.node.ref);
+        link.download = s.node.label;
+        link.click();
+        break;
+      }
+
+      case "download-prefix": {
+        const link = document.createElement("a");
+        link.href = archiveUrl(s.connectionId, s.node.ref);
+        link.download = `${s.node.label || "archive"}.zip`;
+        link.click();
+        notifications.show({
+          message: `zipping ${s.node.label} — the download starts as the files are read`,
+        });
+        break;
+      }
+
+      case "save-prefix":
+        saveAs(archiveUrl(s.connectionId, s.node.ref), `${s.node.label || "archive"}.zip`,
+          { contentType: "application/zip" })
+          .then(outcome => {
+            if (outcome === "saved")
+              notifications.show({ message: `${s.node.label}.zip saved` });
+          })
+          .catch(e => notifications.show({ color: "red", message: String(e.message ?? e) }));
+        break;
+
+      case "save-object":
+        // The other half of a download: the person picks the folder and the name, and the file is
+        // streamed into it. Where the browser cannot ask, this is the download again.
+        saveAs(objectUrl(s.connectionId, s.node.ref), s.node.label)
+          .then(outcome => {
+            if (outcome === "saved")
+              notifications.show({ message: `${s.node.label} saved` });
+          })
+          .catch(e => notifications.show({ color: "red", message: String(e.message ?? e) }));
+        break;
+
+      case "upload-object": {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.onchange = () => {
+          const file = input.files?.[0];
+          if (!file) return;
+
+          uploadObject(s.connectionId, s.node.ref, file)
+            .then(result => {
+              notifications.show({ message: `Uploaded ${result.key}` });
+              setExplorerNonce(n => n + 1);
+            })
+            .catch(e => notifications.show({ color: "red", message: String(e.message ?? e) }));
+        };
+        input.click();
+        break;
+      }
+
+      case "delete-object":
+        // The server refuses this on a read-only or production connection; here it is only about
+        // not deleting something by a slip of the mouse.
+        if (!window.confirm(`Delete ${s.node.label}? This cannot be undone.`)) break;
+
+        await deleteObject(s.connectionId, s.node.ref)
+          .then(() => {
+            notifications.show({ message: `Deleted ${s.node.label}` });
+            setExplorerNonce(n => n + 1);
+          })
+          .catch(e => notifications.show({ color: "red", message: String(e.message ?? e) }));
+        break;
+
+      case "query-as-table": {
+        // A folder is one table once a pattern says which of its files belong together. Guessing
+        // that would turn a folder of CSVs into a Parquet error.
+        const pattern = window.prompt("Which files belong together?", "*.parquet");
+        if (!pattern) break;
+
+        const path = s.node.ref.split(":", 2)[1] ?? "";
+        await openData(s.connectionId, `Prefix:${path}/${pattern}`, `${s.node.label}/${pattern}`);
+        break;
+      }
+
+      case "copy-uri":
+        await navigator.clipboard.writeText(s.node.kind === "StorageObject"
+          ? (await previewObject(s.connectionId, s.node.ref)).uri
+          : s.node.ref.split(":", 2)[1] ?? "");
         break;
 
       case "copy-name":
         await navigator.clipboard.writeText(name);
+        break;
+
+      case "edit-source": {
+        const kind = s.node.kind === "View" || s.node.kind === "MaterializedView"
+          ? "view"
+          : (s.node.kind.toLowerCase() as EditableKind);
+
+        setObjectEditor({
+          connectionId: s.connectionId,
+          dialect: dialectOf(s.connectionId),
+          kind,
+          schema: s.node.ref.split(":", 2)[1]?.split("/")[0] ?? "",
+          objectRef: s.node.ref,
+          name: s.node.label,
+        });
+        break;
+      }
+
+      case "new-view":
+      case "new-routine": {
+        // Which routine depends on the folder it was asked for: a procedure folder makes a
+        // procedure, a trigger folder a trigger.
+        const kind: EditableKind = action === "new-view"
+          ? "view"
+          : s.node.kind === "FunctionFolder" ? "function"
+            : s.node.kind === "TriggerFolder" ? "trigger" : "procedure";
+
+        setObjectEditor({
+          connectionId: s.connectionId,
+          dialect: dialectOf(s.connectionId),
+          kind,
+          schema: s.node.ref.split(":", 2)[1]?.split("/")[0] ?? "",
+        });
+        break;
+      }
+
+      case "new-sequence":
+        setSequenceTarget({
+          connectionId: s.connectionId,
+          schema: s.node.ref.split(":", 2)[1]?.split("/")[0] ?? "",
+        });
+        break;
+
+      case "alter-sequence":
+        setSequenceTarget({
+          connectionId: s.connectionId,
+          schema: s.node.ref.split(":", 2)[1]?.split("/")[0] ?? "",
+          name: s.node.label,
+        });
+        break;
+
+      case "new-schema": {
+        const schemaName = window.prompt("Name of the new schema");
+        if (!schemaName) break;
+
+        await preview(s.connectionId, `Create schema ${schemaName}`,
+          () => previewSchemaChange(s.connectionId, schemaName, false));
+        break;
+      }
+
+      case "drop-schema": {
+        // Whether everything in it goes too is the whole question, so it is asked rather than
+        // assumed either way.
+        const cascade = window.confirm(
+          `Drop ${s.node.label} and everything in it?\n\nCancel drops only an empty schema.`);
+
+        await preview(s.connectionId, `Drop schema ${s.node.label}`,
+          () => previewSchemaChange(s.connectionId, s.node.label, true, cascade));
+        break;
+      }
+
+      case "set-comment": {
+        const detail = await describeObject(s.connectionId, s.node.ref).catch(() => null);
+        const text = window.prompt(`Description of ${s.node.label}`, detail?.comment ?? "");
+        if (text === null) break;
+
+        await preview(s.connectionId, `Description of ${s.node.label}`,
+          () => previewComment(s.connectionId, s.node.ref, text.trim() === "" ? null : text));
+        break;
+      }
+
+      case "trigger-enable":
+      case "trigger-disable":
+        await preview(s.connectionId,
+          `${action === "trigger-enable" ? "Switch on" : "Switch off"} ${s.node.label}`,
+          () => previewTriggerState(s.connectionId, s.node.ref, action === "trigger-enable"));
+        break;
+
+      case "drop-object":
+        await preview(s.connectionId, `Drop ${s.node.label}`,
+          () => previewDrop(s.connectionId, s.node.ref));
         break;
 
       case "rename": {
@@ -803,8 +1114,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
       case "script-insert":
       case "script-update":
       case "script-delete":
-      case "script-truncate":
-      case "script-drop": {
+      case "script-truncate": {
         const detail = await describeObject(s.connectionId, s.node.ref).catch(() => null);
         const columns = detail?.columns.map(c => c.name) ?? [];
         const keys = detail?.columns.filter(c => c.isPrimaryKey).map(c => c.name) ?? [];
@@ -821,9 +1131,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
               ? `UPDATE ${name}\n   SET ${assignments}\n WHERE ${where};`
               : action === "script-delete"
                 ? `DELETE FROM ${name}\n WHERE ${where};`
-                : action === "script-truncate"
-                  ? `-- review before running\nTRUNCATE TABLE ${name};`
-                  : `-- review before running\nDROP TABLE ${name};`;
+                : `-- review before running\nTRUNCATE TABLE ${name};`;
 
         newTab(s.connectionId, script);
         break;
@@ -925,6 +1233,12 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
         });
         break;
 
+      case "dev-subset":
+        setSubsetTarget({
+          connectionId: s.connectionId, schema: schemaOf(s.node.ref), table: s.node.label,
+        });
+        break;
+
       case "grant-schema":
         setGrantTarget({ connectionId: s.connectionId, schema: s.node.label });
         break;
@@ -935,6 +1249,13 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
 
       case "drop-database":
         setDropDatabaseTarget({ connectionId: s.connectionId, name: s.node.label });
+        break;
+
+      case "data-dictionary":
+        setDictionaryFor({
+          connectionId: s.connectionId,
+          label: connections.find(c => c.id === s.connectionId)?.name ?? s.node.label,
+        });
         break;
 
       case "properties":
@@ -970,13 +1291,21 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
 
   // One panel per tool and connection: clicking the button again focuses the panel that is
   // already open instead of stacking duplicates.
-  const openTool = useCallback((component: string, title: string, connectionId: string) => {
+  const openTool = useCallback((component: string, title: string, connectionId: string,
+    tab?: string) => {
     if (!connectionId) return;
     const id = `${component}:${connectionId}`;
-    if (api.current?.getPanel(id)) { focusPanel(id); return; }
+    // Already open: focus it, and switch it to the tab that was asked for — "Scheduled jobs" has to
+    // land on the jobs tab whether or not the admin panel was open already.
+    const existing = api.current?.getPanel(id);
+    if (existing) {
+      focusPanel(id);
+      if (tab) existing.api.updateParameters({ connectionId, tab });
+      return;
+    }
 
     api.current?.addPanel({
-      id, component, title, params: { connectionId },
+      id, component, title, params: { connectionId, tab },
       position: centerGroup.current ? { referenceGroup: centerGroup.current } : undefined,
     });
     flashPanel(api.current?.getPanel(id)?.group.element);
@@ -1029,6 +1358,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
   const pins = useMemo<TabPins>(() => ({
     isPinned: id => pinnedPanels.has(id),
     isProtected: id => PROTECTED_PANELS.has(id),
+    isLayout: id => LAYOUT_PANELS.has(id),
     togglePinned: id => setPinnedPanels(current => {
       const next = new Set(current);
       if (!next.delete(id)) next.add(id);
@@ -1043,21 +1373,25 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
       new KeyboardEvent("keydown", { key: "c", ctrlKey: true, shiftKey: true })),
     formatCurrent: () => document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "f", ctrlKey: true, shiftKey: true })),
-    openConnections: () => { window.location.hash = "#/connections"; },
-    addConnection: () => { window.location.hash = "#/connections?add=1"; },
+    openConnections: () => navigate("/connections"),
+    addConnection: () => navigate("/connections?add=1"),
     refreshExplorer: () => setExplorerNonce(n => n + 1),
     goToObject: () => setGotoOpen(true),
-    openDiagram: () => openTool("diagram", "Diagram", activeConnection),
-    openHealth: () => focusPanel("health"),
-    openAdmin: () => openTool("admin", "Admin", activeConnection),
-    openCompare: () => openTool("compare", "Compare", activeConnection),
-    openNotebook: () => openTool("notebook", "Notebook", activeConnection),
-    openFederation: () => openTool("federate", "Federated", activeConnection),
-    openPerspective: () => openTool("perspective", "Perspective", activeConnection),
-    openArchives: () => openTool("archive", "Archives", activeConnection),
-    openHistory: () => focusPanel("history"),
-    openSavedQueries: () => focusPanel("saved"),
+    addBucket: () => navigate("/connections?bucket=1"),
+    importFile: () => setNewTable({ connectionId: activeConnection }),
+    // Every tool goes through the one registry: a panel is focused, a per-connection tool is
+    // opened, and the tab it asked for travels with it.
+    openTool: tool => {
+      if (tool.dock === "route") { navigate(tool.component); return; }
+
+      if (tool.dock === "panel") { focusPanel(tool.component); return; }
+
+      openTool(tool.component, tool.title, activeConnection, tool.tab);
+    },
     saveCurrentQuery: () => focusPanel("saved"),
+    activeConnection,
+    engine: engineOf(activeConnection),
+    admin: isAdmin(role),
     exportResult: () => {
       const tab = tabs[tabs.length - 1];
       if (tab) exportQuery(tab.connectionId, tab.sql);
@@ -1068,7 +1402,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
       const tab = tabs[tabs.length - 1];
       if (tab) openInBuilder(tab.connectionId, tab.sql);
     },
-    switchTheme: () => document.dispatchEvent(new CustomEvent("wds:cycle-theme")),
+    switchTheme: () => emit("cycle-theme"),
     saveLayout: () => setLayoutsOpen(true),
     resetLayout,
     copyLink: () => {
@@ -1160,23 +1494,33 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
     return () => window.removeEventListener("keydown", onKey);
   }, [activeConnection, applyLayout, commands, presets, resetLayout, showExplorer]);
 
-  // The header button lives outside this component; the theme switch uses the same channel.
-  useEffect(() => {
-    const open = () => setLayoutsOpen(true);
-    document.addEventListener("wds:layouts", open);
-    return () => document.removeEventListener("wds:layouts", open);
-  }, []);
+  // The header and the chat dock live outside this component — they wrap the routes — so what they
+  // ask for arrives through the shell bus rather than through props that do not exist.
+  useEffect(() => onShell("layouts", () => setLayoutsOpen(true)), []);
+  useEffect(() => onShell("palette", () => setPaletteOpen(true)), []);
 
-  // The chat lives outside the dock, so "put this in the editor" arrives as an event.
-  useEffect(() => {
-    const use = (event: Event) => {
-      const sql = (event as CustomEvent<string>).detail;
-      if (typeof sql === "string" && sql.trim().length > 0) newTab(activeConnection, sql);
-    };
+  useEffect(() => onShell("use-sql", sql => {
+    if (typeof sql === "string" && sql.trim().length > 0) newTab(activeConnection, sql);
+  }), [activeConnection, newTab]);
 
-    document.addEventListener("wds:use-sql", use);
-    return () => document.removeEventListener("wds:use-sql", use);
-  }, [activeConnection, newTab]);
+  // The header names a command; the dock owns them, so it runs it. A disabled one is ignored, which
+  // is what the menu already shows.
+  useEffect(() => onShell("command", id => {
+    const command = commands.find(entry => entry.id === id);
+    if (command && !command.disabled) command.run();
+  }), [commands]);
+
+  // And what the header needs to render: whether a connection is selected, which engine it is,
+  // whether this is an admin, and the command list itself — so the menu and the palette cannot
+  // offer different things.
+  useEffect(() => {
+    publishShell({
+      activeConnection,
+      engine: engineOf(activeConnection),
+      admin: isAdmin(role),
+      commands,
+    });
+  }, [activeConnection, commands, engineOf, role]);
 
   // A deep link opens its target once the connections are known.
   const followedLink = useRef(false);
@@ -1202,6 +1546,7 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
         activeConnection,
         select: setSelection,
         action: handleAction,
+        dropFiles: handleDrop,
         newQuery: () => newTab(activeConnection),
         focusPanel,
         openTool,
@@ -1222,8 +1567,30 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
 
       <ExportDialog target={exportTarget} onClose={() => setExportTarget(null)} />
       <ImportDialog target={importTarget} onClose={() => setImportTarget(null)} />
+
+      {newTable && (
+        <NewTableDialog connectionId={newTable.connectionId} source={newTable.source}
+          dropped={newTable.dropped}
+          onClose={() => setNewTable(null)}
+          onDone={(table: string) => {
+            notifications.show({ message: `${table} created` });
+            setExplorerNonce(n => n + 1);
+          }} />
+      )}
       <CopyTableDialog source={copySource} connections={connections}
         onClose={() => setCopySource(null)} />
+
+      <ObjectEditor target={objectEditor} onClose={() => setObjectEditor(null)}
+        onPreview={pending => { setObjectEditor(null); setPendingScript(pending); }} />
+
+      <SequenceDialog target={sequenceTarget} onClose={() => setSequenceTarget(null)}
+        onPreview={pending => { setSequenceTarget(null); setPendingScript(pending); }} />
+
+      <ScriptConfirm pending={pendingScript} onClose={() => setPendingScript(null)}
+        onApplied={() => setExplorerNonce(n => n + 1)} />
+
+      <SubsetDialog target={subsetTarget} onClose={() => setSubsetTarget(null)}
+        onOpenInEditor={sql => newTab(subsetTarget?.connectionId ?? activeConnection, sql)} />
 
       <Modal opened={indexTarget !== null} onClose={() => setIndexTarget(null)} size="xl"
         title={indexTarget ? `Indexes of ${indexTarget.label}` : ""}>
@@ -1236,8 +1603,14 @@ Used by: ${preview.dependencies.usedBy.join(", ") || "nothing found"}`))
         ) : null}
       </Modal>
 
+      <DataDictionaryModal target={dictionaryFor} onClose={() => setDictionaryFor(null)} />
+
+      <FileViewerModal file={viewingFile} onClose={() => setViewingFile(null)} />
+
       <PropertiesDialog connectionId={propertiesFor?.connectionId ?? null}
-        label={propertiesFor?.label ?? ""} onClose={() => setPropertiesFor(null)} />
+        label={propertiesFor?.label ?? ""} onClose={() => setPropertiesFor(null)}
+        // Fewer schemas means a different tree, so it is re-read rather than left stale.
+        onScopeChanged={() => setExplorerNonce(n => n + 1)} />
 
       <GrantDialog target={grantTarget} onClose={() => setGrantTarget(null)} onScript={runStatement} />
       <ArchiveDialog target={archiveTarget} onClose={() => setArchiveTarget(null)} />

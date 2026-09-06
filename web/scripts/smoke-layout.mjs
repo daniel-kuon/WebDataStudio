@@ -38,12 +38,25 @@ check("the explorer has a tab of its own", await explorerTab.count() === 1);
 
 // The context menu belongs at the pointer, not at the right edge of the row that was clicked.
 {
-  const row = await page.getByText("DEMO", { exact: true }).boundingBox();
-  const x = Math.round(row.x + 20);
-  const y = Math.round(row.y + 5);
-  await page.mouse.click(x, y, { button: "right" });
-  await page.waitForTimeout(300);
-  const menu = await page.locator(".mantine-Popover-dropdown").first().boundingBox();
+  // A row that is still being drawn has no box, and the layout was reset a moment ago.
+  const demo = page.getByText("DEMO", { exact: true }).first();
+  await demo.waitFor({ state: "visible", timeout: 15000 });
+
+  const row = await demo.boundingBox();
+  // Playwright clicks the middle of the element, so that is the pointer this check compares against
+  // — a hand-picked offset lands on the edge of the row once the explorer has been dragged around.
+  const x = Math.round(row.x + row.width / 2);
+  const y = Math.round(row.y + row.height / 2);
+  await demo.click({ button: "right" });
+
+  // The dropdown is positioned after it mounts, so a box read too early is null.
+  // The one that is open: the app keeps other popovers mounted and hidden, and a hidden one has no
+  // position to compare against.
+  const dropdown = page.locator(".mantine-Popover-dropdown:visible").first();
+  await dropdown.waitFor({ state: "visible", timeout: 10000 });
+  await page.waitForTimeout(200);
+
+  const menu = await dropdown.boundingBox();
   check(`the menu opens at the pointer (${Math.round(menu.x)},${Math.round(menu.y)} vs ${x},${y})`,
     Math.abs(menu.x - x) < 30 && Math.abs(menu.y - y) < 40);
   await page.keyboard.press("Escape");
@@ -54,16 +67,22 @@ await page.keyboard.press("Control+l");
 await page.keyboard.press("0");
 await page.waitForTimeout(600);
 
-const history = page.getByRole("button", { name: "History", exact: true });
+// The explorer's toolbar used to carry an icon per tool and was cut off at any sensible width; the
+// tools live in one menu now, rendered by the header and by the explorer from the same registry.
+const openHistory = async () => {
+  await page.getByRole("banner").getByRole("button", { name: "Tools" }).click();
+  await page.getByRole("menuitem", { name: /Query history/ }).first().click();
+};
+
 const flashing = () => page.locator(".wds-flash").count();
 
-// History is docked from the start, so the second click is the case the flash exists for: nothing
-// else on screen moves, and without it the button looks broken.
-await history.click();
+// History is docked from the start, so the second time is the case the flash exists for: nothing
+// else on screen moves, and without it the entry looks broken.
+await openHistory();
 check("first activation flashes", await flashing() === 1);
 await page.waitForTimeout(900);
 check("the flash clears itself", await flashing() === 0);
-await history.click();
+await openHistory();
 check("an already-active panel flashes again", await flashing() === 1);
 await page.waitForTimeout(900);
 

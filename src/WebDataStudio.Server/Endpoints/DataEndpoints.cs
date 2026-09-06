@@ -42,6 +42,140 @@ public static class DataEndpoints
         // Azure Container Apps, and most others — decodes %2F back to a real slash before routing.
         // The route then no longer matches and every object lookup answered 404 in the cloud while
         // working on a machine with nothing in front of it.
+        // What a table actually holds, counted rather than guessed: rows, how many of them have a
+        // value in each column, how many different ones, the smallest and the largest — and, from a
+        // sample of the values, which columns look like they hold something personal.
+        app.MapGet("/api/data/{conn}/profile", async (string conn,
+            [FromQuery(Name = "ref")] string objectRef, int? sample, SessionFactory factory,
+            MaskPolicyStore policies, CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    var target = SchemaEndpoints.ParseObjectRef(objectRef);
+                    var detail = await driver.DescribeAsync(session, target, ct);
+
+                    if (driver.FromClause(session, target) is not { } from)
+                        return Results.BadRequest(new { message = "this object cannot be read" });
+
+                    var columns = detail.Columns
+                        .Select(column => new ColumnMeta(column.Name, column.DataType, column.Nullable))
+                        .ToList();
+
+                    // No columns is not an empty profile: it is an object that is not there, or one
+                    // this engine cannot describe. Saying so beats a page of zeroes.
+                    if (columns.Count == 0)
+                        return Results.BadRequest(new
+                        {
+                            message = $"there is nothing to profile in {target.Name}",
+                        });
+
+                    var (stats, note) = await Analysis.ColumnProfile.ReadAsync(session, driver.Dialect,
+                        from, columns, ct);
+
+                    var hints = await Analysis.ColumnProfile.SniffAsync(session, driver.Dialect, from,
+                        columns, sample ?? Analysis.ColumnProfile.DefaultSample, ct);
+
+                    var policy = policies.For(conn);
+
+                    return Results.Ok(new
+                    {
+                        note,
+                        rows = stats.Count > 0 ? stats[0].Rows : 0,
+                        columns = stats.Select(stat => new
+                        {
+                            stat.Name,
+                            stat.DataType,
+                            stat.NonNull,
+                            stat.Nulls,
+                            stat.NullPercent,
+                            stat.Distinct,
+                            stat.Min,
+                            stat.Max,
+                            stat.Unique,
+                            stat.Constant,
+                            // What the studio already hides, so a hint about a column that is
+                            // already masked can say so instead of repeating itself.
+                            masked = SensitiveColumns.ShouldMask(stat.Name, policy),
+                        }),
+                        // Read from the values, which is what the name heuristic cannot do.
+                        hints = hints.Select(hint => new
+                        {
+                            hint.Column,
+                            hint.Looks,
+                            hint.Matches,
+                            hint.Sampled,
+                            hint.Percent,
+                            masked = SensitiveColumns.ShouldMask(hint.Column, policy),
+                        }),
+                        suggestions = Analysis.ColumnProfile.Suggest(stats).Select(suggestion => new
+                        {
+                            suggestion.Column,
+                            kind = suggestion.Kind.ToString(),
+                            suggestion.Argument,
+                            suggestion.Why,
+                        }),
+                    });
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
+        // What is actually inside a JSON column: which paths exist, how often, with which types.
+        // A JSONB column is one cell of text in the grid otherwise, and reading one row of it is a
+        // guess.
+        app.MapGet("/api/data/{conn}/json", async (string conn,
+            [FromQuery(Name = "ref")] string objectRef, string column, int? sample,
+            SessionFactory factory, CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    var target = SchemaEndpoints.ParseObjectRef(objectRef);
+                    var detail = await driver.DescribeAsync(session, target, ct);
+
+                    // Only a column that exists: everything else here is interpolated into SQL.
+                    if (detail.Columns.All(c => !c.Name.Equals(column, StringComparison.OrdinalIgnoreCase)))
+                        return Results.BadRequest(new { message = $"no column '{column}'" });
+
+                    if (driver.FromClause(session, target) is not { } from)
+                        return Results.BadRequest(new { message = "this object cannot be read" });
+
+                    var report = await JsonShape.DescribeAsync(driver, session, from, column,
+                        sample ?? JsonShape.DefaultSample, ct);
+
+                    return Results.Ok(new
+                    {
+                        report.Sampled,
+                        report.Parsed,
+                        report.Note,
+                        // Each path with the SQL that reads it on this engine: the panel copies it
+                        // or builds a SELECT from it, and neither has to know one engine's spelling
+                        // from another's.
+                        paths = report.Paths.Select(path => new
+                        {
+                            path.Path,
+                            path.Types,
+                            path.Present,
+                            path.Example,
+                            expression = JsonShape.Expression(driver.Dialect, column, path.Path),
+                        }),
+                        // The SELECT that turns the paths into columns, ready for a query tab.
+                        flatten = JsonShape.FlattenSql(driver.Dialect, from, column, report.Paths),
+                    });
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
         app.MapGet("/api/data/{conn}", async (string conn, [FromQuery(Name = "ref")] string objectRef,
             int? offset, int? limit, string? sort, bool? desc, string? filterColumn, string? filter,
             bool? reveal, [FromQuery(Name = "lookup")] string[]? lookup, SessionFactory factory,
@@ -62,12 +196,51 @@ public static class DataEndpoints
                         });
 
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
-                    var detail = await driver.DescribeAsync(session, target, ct);
-                    var identity = RowIdentity.Resolve(detail);
-
-                    var table = ChangeScriptBuilder.Qualify(target, driver.Dialect);
                     var take = Math.Clamp(limit ?? defaultLimit, 1, 100_000);
                     var skip = Math.Max(offset ?? 0, 0);
+
+                    // An engine that has no SQL builds its own page: a MongoDB collection is a
+                    // find().sort().skip().limit(), a Redis database is its keys, a Redis key is its
+                    // own contents. Asked before anything else, because none of what follows -
+                    // a FROM clause, a WHERE, an ORDER BY - exists for them.
+                    if (await driver.PageAsync(session, target,
+                            new PageQuery(skip, take, sort, desc == true, filterColumn, filter), ct)
+                        is { } built)
+                    {
+                        var hidden = reveal == true
+                            ? []
+                            : Masking.IndexesOf(built.Columns, policies.For(conn));
+
+                        return Results.Ok(new
+                        {
+                            columns = Masking.Describe(built.Columns, hidden),
+                            rows = Masking.Apply(built.Rows, hidden),
+                            editable = built.Editable && !session.Spec.ReadOnly,
+                            keyColumns = Array.Empty<string>(),
+                            reason = session.Spec.ReadOnly ? "this connection is read-only" : built.Reason,
+                            totalEstimate = built.Total,
+                            // The engine counted this one itself, for this query.
+                            totalIsEstimate = false,
+                            lookups = Array.Empty<string>(),
+                            offset = skip,
+                            limit = take,
+                            // What the driver could not do with this query, said rather than swallowed.
+                            note = built.Note,
+                        });
+                    }
+
+                    var detail = await driver.DescribeAsync(session, target, ct);
+                    var identity = RowIdentity.Resolve(detail, driver.Dialect);
+
+                    // A table is selected from by name; a file in a bucket by a reader over it.
+                    // The driver says which, and a file no reader understands says so instead of
+                    // producing SQL that fails.
+                    if (driver.FromClause(session, target) is not { } table)
+                        return Results.BadRequest(new
+                        {
+                            message = "this object cannot be read as a table; open the preview or " +
+                                      "download it instead",
+                        });
 
                     // A column from the table on the other side of a foreign key, shown here rather
                     // than reached by following it: "orders.customer_id.name" next to the id.
@@ -110,6 +283,13 @@ public static class DataEndpoints
                         ? "*"
                         : $"{alias}.*, {string.Join(", ", lookups.Select(l => l.Projection))}";
 
+                    // A table with no key is addressed by where its rows physically are, and that
+                    // only works if the address comes back with them. Quoted, so Oracle does not
+                    // hand it back upper-cased and the grid loses track of which column it is.
+                    if (identity.RowAddress is { } rowAddress)
+                        projection = $"{(alias is null ? "" : alias + ".")}{rowAddress} AS " +
+                                     $"{driver.Dialect.QuoteIdentifier(RowIdentity.AddressColumn)}, {projection}";
+
                     var from = alias is null
                         ? table
                         : $"{table} {alias}{string.Concat(lookups.Select(l => l.Join))}";
@@ -149,7 +329,13 @@ public static class DataEndpoints
                         editable = identity.Editable && !session.Spec.ReadOnly,
                         keyColumns = identity.KeyColumns,
                         reason = session.Spec.ReadOnly ? "this connection is read-only" : identity.Reason,
+                        // What the catalogue says the table holds: cheap, and on PostgreSQL, SQL
+                        // Server and MySQL an estimate rather than a count. It also knows nothing
+                        // about a filter, so with one in force it is not this result's size at all —
+                        // which is what /count is for.
                         totalEstimate = detail.RowCount,
+                        totalIsEstimate = true,
+                        filtered = filter is { Length: > 0 } && filterColumn is { Length: > 0 },
                         // Which of the columns came from another table. They are read-only: an
                         // edit here would be an update to a row this grid is not addressing.
                         lookups = lookups.Select(l => l.Name),
@@ -183,7 +369,7 @@ public static class DataEndpoints
 
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
                     var detail = await driver.DescribeAsync(session, target, ct);
-                    var identity = RowIdentity.Resolve(detail);
+                    var identity = RowIdentity.Resolve(detail, driver.Dialect);
 
                     // A join can only follow a foreign key this table declares: the key is schema,
                     // not input, so the joined table and its ON clause cannot be made up.
@@ -254,7 +440,10 @@ public static class DataEndpoints
 
                     var (text, parameters) = BrowseQuery.Build(
                         ChangeScriptBuilder.Qualify(target, driver.Dialect), detail, joins, lookups,
-                        input, driver.Dialect, CharType(driver));
+                        input, driver.Dialect, CharType(driver),
+                        // A keyless table is addressed by where its rows physically are; the
+                        // address only helps a shape that is still one row per table row.
+                        rowAddress: !grouped ? identity.RowAddress : null);
 
                     var sql = driver.Dialect.Paginate(text, skip, take);
                     var request = new ScriptRequest(sql, take, timeout, Parameters: parameters);
@@ -303,6 +492,8 @@ public static class DataEndpoints
                         keyColumns = identity.KeyColumns,
                         reason,
                         totalEstimate = grouped ? null : detail.RowCount,
+                        totalIsEstimate = !grouped,
+                        filtered = input.Filters.Count > 0,
                         // Which of the columns are borrowed from another table: read-only, like the
                         // GET marks them.
                         lookups = lookups.Select(l => l.Name),
@@ -317,9 +508,143 @@ public static class DataEndpoints
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
 
+        // "What did this row look like yesterday?" — only where the database kept the answer
+        // itself. Asked once when a data tab opens, so a button that cannot work is never drawn.
+        app.MapGet("/api/data/{conn}/history/available", async (string conn,
+            [FromQuery(Name = "ref")] string objectRef, SessionFactory factory, CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    var target = SchemaEndpoints.ParseObjectRef(objectRef);
+                    var (supported, note) = await RowHistory.SupportsAsync(driver, session, target, ct);
+
+                    return Results.Ok(new { supported, note });
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
+        // The versions of one row, newest first, each with what changed since the one before it.
+        app.MapGet("/api/data/{conn}/history", async (string conn,
+            [FromQuery(Name = "ref")] string objectRef, [FromQuery(Name = "key")] string[]? key,
+            int? limit, SessionFactory factory, MaskPolicyStore policies, CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    var target = SchemaEndpoints.ParseObjectRef(objectRef);
+
+                    // `key=id:42` per column: the values that address one row.
+                    var values = (key ?? [])
+                        .Select(pair => pair.Split(':', 2))
+                        .Where(parts => parts.Length == 2)
+                        .ToDictionary(parts => parts[0], parts => (string?)parts[1]);
+
+                    var history = await RowHistory.ReadAsync(driver, session, target, values,
+                        Math.Clamp(limit ?? RowHistory.MaxVersions, 1, RowHistory.MaxVersions), ct);
+
+                    // The same masking the grid applies: a history is the same data, older.
+                    var masked = Masking.IndexesOf(history.Columns, policies.For(conn));
+
+                    return Results.Ok(new
+                    {
+                        history.Supported,
+                        columns = Masking.Describe(history.Columns, masked),
+                        versions = history.Versions.Select(version => new
+                        {
+                            version.From,
+                            version.To,
+                            values = Masking.Apply([version.Values.ToArray()], masked)[0],
+                            version.Changed,
+                        }),
+                        history.Note,
+                    });
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
         // The values a column actually holds, most common first — the checkbox list that saves
         // guessing what to type into the filter. A masked column is refused rather than counted:
         // the distinct values of a column of secrets are the secrets.
+        // How many rows there really are — for the pager, which cannot honestly say "1-200 of
+        // 12,345" out of a number the catalogue guessed and a filter it never saw. Asked for
+        // deliberately, because on a large table this is a scan.
+        app.MapGet("/api/data/{conn}/count", async (string conn,
+            [FromQuery(Name = "ref")] string objectRef, string? filterColumn, string? filter,
+            SessionFactory factory, CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    if (!driver.Caps.Sql)
+                        return Results.BadRequest(new
+                        {
+                            message = $"{driver.Info.Label} cannot count rows on request; the number "
+                                      + "it browses with is the one it has",
+                        });
+
+                    var target = SchemaEndpoints.ParseObjectRef(objectRef);
+                    var detail = await driver.DescribeAsync(session, target, ct);
+
+                    var columnNames = detail.Columns
+                        .Select(c => c.Name)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    var parameters = new Dictionary<string, object?>();
+                    var where = "";
+
+                    // The same filter the page was built with, or the count would answer a different
+                    // question than the one on screen.
+                    if (filterColumn is { Length: > 0 } && columnNames.Contains(filterColumn)
+                        && filter is { Length: > 0 })
+                    {
+                        var column = detail.Columns
+                            .First(c => c.Name.Equals(filterColumn, StringComparison.OrdinalIgnoreCase));
+
+                        var condition = FilterExpression.Build(driver.Dialect,
+                            driver.Dialect.QuoteIdentifier(column.Name),
+                            FilterExpression.KindOf(column.DataType), filter, "c");
+
+                        if (!condition.IsEmpty)
+                        {
+                            where = $" WHERE {condition.Sql}";
+                            foreach (var (key, value) in condition.Parameters) parameters[key] = value;
+                        }
+                    }
+
+                    var sql = $"SELECT count(*) FROM {driver.FromClause(session, target)}{where}";
+                    long? total = null;
+
+                    await foreach (var chunk in driver.ExecuteAsync(session,
+                        new ScriptRequest(sql, 1, timeout, Parameters: FilterExpression.AsText(parameters)), ct))
+                    {
+                        if (chunk is ResultChunk.Error error)
+                            return Results.Json(new { message = error.Text }, statusCode: 502);
+
+                        if (chunk is ResultChunk.Rows rows && rows.Items.Count > 0)
+                            total = Convert.ToInt64(rows.Items[0].ElementAtOrDefault(0) ?? 0L);
+                    }
+
+                    return Results.Ok(new { total });
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
         app.MapGet("/api/data/{conn}/distinct", async (string conn,
             [FromQuery(Name = "ref")] string objectRef, string column, string? search, int? limit,
             SessionFactory factory, MaskPolicyStore policies, CancellationToken ct) =>
@@ -329,8 +654,14 @@ public static class DataEndpoints
                 var (driver, session) = await factory.OpenAsync(conn, ct);
                 await using (session)
                 {
-                    if (!driver.Caps.TabularBrowse)
-                        return Results.BadRequest(new { message = $"{driver.Info.Label} has no columns to count" });
+                    // Counting values is a GROUP BY, which is SQL. An engine without it browses
+                    // (PageAsync) but cannot answer this one.
+                    if (!driver.Caps.Sql)
+                        return Results.BadRequest(new
+                        {
+                            message = $"{driver.Info.Label} cannot count the values of a column; "
+                                      + "type the filter instead",
+                        });
 
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
                     var detail = await driver.DescribeAsync(session, target, ct);
@@ -364,7 +695,7 @@ public static class DataEndpoints
                     }
 
                     var sql = driver.Dialect.Paginate(
-                        $"SELECT {quoted}, count(*) AS n FROM {ChangeScriptBuilder.Qualify(target, driver.Dialect)}"
+                        $"SELECT {quoted}, count(*) AS n FROM {driver.FromClause(session, target)}"
                         + $"{where} GROUP BY {quoted} ORDER BY n DESC", 0, take + 1);
 
                     var values = new List<object>();
@@ -439,7 +770,7 @@ public static class DataEndpoints
                 {
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
                     var detail = await driver.DescribeAsync(session, target, ct);
-                    var identity = RowIdentity.Resolve(detail);
+                    var identity = RowIdentity.Resolve(detail, driver.Dialect);
 
                     if (!identity.Editable)
                         return Results.BadRequest(new { message = identity.Reason });
@@ -596,7 +927,7 @@ public static class DataEndpoints
                 {
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
                     var detail = await driver.DescribeAsync(session, target, ct);
-                    var identity = RowIdentity.Resolve(detail);
+                    var identity = RowIdentity.Resolve(detail, driver.Dialect);
 
                     var changeSet = new ChangeSet(conn, target.ToString(), entry.Changes);
                     var script = ChangeScriptBuilder.Build(changeSet, detail, driver.Dialect);
@@ -670,7 +1001,7 @@ public static class DataEndpoints
                 {
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
                     var detail = await driver.DescribeAsync(session, target, ct);
-                    var identity = RowIdentity.Resolve(detail);
+                    var identity = RowIdentity.Resolve(detail, driver.Dialect);
 
                     if (!identity.Editable)
                         return Results.BadRequest(new { message = identity.Reason });
@@ -739,7 +1070,7 @@ public static class DataEndpoints
 
                     var key = driver.Dialect.QuoteIdentifier(column);
                     var labelExpression = label is null ? key : driver.Dialect.QuoteIdentifier(label.Name);
-                    var table = ChangeScriptBuilder.Qualify(target, driver.Dialect);
+                    var table = driver.FromClause(session, target);
 
                     var where = "";
                     var parameters = new Dictionary<string, string?>();

@@ -3,6 +3,7 @@ using System.Xml.Linq;
 using Microsoft.Data.SqlClient;
 using WebDataStudio.Server.Drivers.Abstractions;
 using WebDataStudio.Server.Models;
+using WebDataStudio.Server.Services;
 
 namespace WebDataStudio.Server.Drivers.SqlServer;
 
@@ -42,6 +43,9 @@ public sealed class SqlServerDriver : AdoDriverBase
         // database and the file already sitting there, so we do not offer it.
         IncludeColumns = true, Backup = true, UserManagement = true,
         SessionList = true, KillSession = true, ServerStats = true, SlowQueryLog = true,
+        // SQL Server Agent. msdb answers even where the service is off, and an empty list is
+        // then the truth rather than an error.
+        Jobs = true,
         SystemCommands = true,
         ActivityProgress = true, Replication = true,
     };
@@ -50,22 +54,34 @@ public sealed class SqlServerDriver : AdoDriverBase
 
     public override async Task<IDbSession> OpenAsync(ConnectionSpec spec, CancellationToken ct)
     {
-        var connection = new SqlConnection(spec.ConnectionString);
+        // A token means somebody signed in through the studio's own device-code flow: SqlClient then
+        // gets the token rather than an Authentication= keyword, because the two are exclusive.
+        var connection = spec.AccessToken is { Length: > 0 } token
+            ? new SqlConnection(EntraConnectionString.WithoutAuthentication(spec.ConnectionString))
+                { AccessToken = token }
+            : new SqlConnection(spec.ConnectionString);
+
         await connection.OpenAsync(ct);
         return new AdoSession(spec, connection);
     }
 
     public override async Task<IReadOnlyList<SchemaNode>> IntrospectAsync(
-        IDbSession session, SchemaNodeRef? parent, CancellationToken ct)
+        IDbSession session, SchemaNodeRef? parent, CancellationToken ct, bool systemObjects = false)
     {
         if (parent is null)
+        {
+            // Every database has the ten fixed database roles — db_owner, db_datareader and the
+            // rest — as schemas of their own, and they are empty in all but a handful of databases.
+            // Together with sys, INFORMATION_SCHEMA and guest they are what the tree leaves out
+            // until somebody asks for them.
+            var visible = systemObjects
+                ? "1 = 1"
+                : """name NOT IN ('sys','INFORMATION_SCHEMA','guest') AND name NOT LIKE 'db\_%' ESCAPE '\'""";
+
             return await QueryAsync(session, ct,
-                """
-                SELECT name FROM sys.schemas
-                 WHERE name NOT IN ('sys','INFORMATION_SCHEMA','guest') AND name NOT LIKE 'db\_%' ESCAPE '\'
-                 ORDER BY name
-                """,
+                $"SELECT name FROM sys.schemas WHERE {visible} ORDER BY name",
                 name => new SchemaNode(new SchemaNodeRef(SchemaNodeKind.Schema, [name]), name, true));
+        }
 
         if (parent.Kind == SchemaNodeKind.Schema)
         {

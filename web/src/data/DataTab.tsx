@@ -1,33 +1,54 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActionIcon, Alert, Badge, Button, Group, Loader, Menu, Pagination, Text, Tooltip,
+  ActionIcon, Alert, Badge, Button, Group, Loader, Menu, Select, Text, Tooltip,
 } from "@mantine/core";
 import {
-  IconArrowBackUp, IconArrowRight, IconChevronDown, IconChevronRight, IconCopy, IconCopyPlus,
-  IconCornerDownLeft, IconDeviceFloppy, IconDownload, IconEye, IconEyeOff,
+  IconArrowBackUp, IconArrowRight, IconChevronDown, IconChevronRight, IconClipboardPlus, IconCopy,
+  IconCopyPlus, IconCornerDownLeft, IconDeviceFloppy, IconDownload, IconEye, IconEyeOff,
   IconFilter, IconLayoutColumns, IconLock, IconPlus, IconRefresh, IconRestore, IconRoute,
   IconSortAscending, IconSortDescending, IconSquareArrowRight, IconTrash,
-  IconSparkles, IconWand,
+  IconSparkles, IconWand, IconBraces, IconHistory,
 } from "@tabler/icons-react";
 import { copyAsCsv, copyAsJson, copyAsMarkdown, copyAsSqlInList } from "../export/copyAs";
 import {
-  browseTable, getMaskPolicy, getUndoState, lookupValues, referencingKeys, saveMaskPolicy,
+  browseTable, countRows, getMaskPolicy, getUndoState, historyAvailable, lookupValues,
+  referencingKeys, saveMaskPolicy,
   type BrowseAggregate, type BrowseFilter, type BrowseSort, type DataPageDto, type ForeignKeyDto,
   type ReferencingKeyDto, type UndoStateDto,
 } from "../api";
+import { Pager } from "../grid/Pager";
 
 import { CellValue } from "../grid/CellValue";
 import { MenuFilterInput } from "../grid/MenuFilterInput";
 import { DistinctValues } from "../grid/DistinctValues";
 import { LookupPicker } from "../grid/LookupPicker";
+import { JsonColumnDialog } from "./JsonColumnDialog";
+import { followColumns, newRows, withoutAddress, ROW_ADDRESS } from "./follow";
+import { parsePastedRows } from "../export/pasteRows";
 import { EditableCell } from "../grid/editing/EditableCell";
 import { ChangePreviewModal } from "../grid/editing/ChangePreviewModal";
 import { GenerateDialog } from "./GenerateDialog";
 import { BulkUpdateModal } from "../grid/editing/BulkUpdateModal";
 import { useChangeSet, type RowChange } from "../grid/editing/useChangeSet";
-import { usePreferences } from "../shell/preferences";
+import { preferences, savePreferences, usePreferences } from "../shell/preferences";
+import { RowHistoryModal } from "./RowHistoryModal";
+import { carriesZone, describeZone } from "../grid/formatTime";
 import { QueryBar } from "./QueryBar";
 import { ReferencingRows } from "./ReferencingRows";
+
+/// The same "14:00" means two different moments in `timestamptz` and in `timestamp`, so the header
+/// says which of the two this column is.
+const zoneNote = (dataType: string) => {
+  const zoned = carriesZone(dataType);
+
+  return zoned === null ? null
+    : zoned ? `${dataType} — stored with a time zone`
+      : `${dataType} — no time zone stored`;
+};
+
+/// A column that holds bytes. Typing into one is not what anybody wants; it takes a file.
+const isBinary = (type: string) =>
+  /(binary|blob|bytea|image|^raw)/i.test(type);
 
 /// The referenced table as a schema node reference; an unqualified name means the same schema.
 export const foreignKeyRef = (fk: ForeignKeyDto) =>
@@ -60,26 +81,55 @@ export interface DataTabProps {
   onFkNavModeChange?: (mode: FkNavMode) => void;
   /// Opens the export dialog on this table. Absent only where there is no shell to open it in.
   onExport?: () => void;
+  /// The filter the tab opens with. The data search uses it: a hit opens its table already filtered
+  /// on the column that matched.
+  initialFilter?: { column: string; value: string } | null;
+  /// Opens SQL in a query tab — the flatten of a JSON column goes there rather than running here.
+  onOpenInEditor?: (sql: string) => void;
+}
+
+/// Whether this column is worth opening the JSON panel on: a declared JSON type, or a text column
+/// whose values on this page start like a document. Guessing from the type alone would miss every
+/// `text` column that holds JSON, which is most of them outside PostgreSQL.
+function jsonish(dataType: string, values: unknown[]): boolean {
+  if (/json/i.test(dataType)) return true;
+  if (!/char|text|string|clob/i.test(dataType)) return false;
+
+  return values.some(value => typeof value === "string"
+    && (value.trimStart().startsWith("{") || value.trimStart().startsWith("[")));
 }
 
 export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], initialFilters,
-  onFollowForeignKey, onOpenReferencing, fkNavMode, onFkNavModeChange, onExport }: DataTabProps) {
+  onFollowForeignKey, onOpenReferencing, fkNavMode, onFkNavModeChange, onExport,
+  initialFilter = null, onOpenInEditor }: DataTabProps) {
   // How many rows a page holds is a preference, not a constant: a wide table wants fewer.
   const { pageSize } = usePreferences();
   const [page, setPage] = useState<(DataPageDto & { grouped?: boolean }) | null>(null);
   const [pageIndex, setPageIndex] = useState(1);
+  // What a count said, for as long as this page is the one it counted.
+  const [exactTotal, setExactTotal] = useState<number | null>(null);
+  const [counting, setCounting] = useState(false);
   // Keyed by name, like every other piece of column state in this tab — the row editor, the key
   // badge and the foreign-key lookup all address columns by name.
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // Whether the database itself kept older versions of these rows. Asked once per tab, so a
+  // button that cannot work is never drawn.
+  const [historySupported, setHistorySupported] = useState(false);
+  const [historyOf, setHistoryOf] = useState<Record<string, string> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // What a paste did, said once rather than as a toast that is gone before it is read.
+  const [pasteNote, setPasteNote] = useState<string | null>(null);
   const [pending, setPending] = useState<RowChange[] | null>(null);
   const [bulk, setBulk] = useState<{ rowIndex: number; column: string; value: unknown }[] | null>(null);
   const [selected, setSelected] = useState<{ row: number; col: number }[]>([]);
   const [nonce, setNonce] = useState(0);
   // Everything the query bar says. Filtering, sorting, joining and grouping all happen on the
   // server: a page holds a few hundred of possibly millions of rows, so doing any of it in the
-  // browser would work on the wrong set.
-  const [filters, setFilters] = useState<BrowseFilter[]>(initialFilters ?? []);
+  // browser would work on the wrong set. A column box's quick filter is an "expr" filter here —
+  // the same small language the plain browse speaks.
+  const [filters, setFilters] = useState<BrowseFilter[]>(
+    initialFilters
+    ?? (initialFilter ? [{ column: initialFilter.column, op: "expr", value: initialFilter.value }] : []));
   const [sorts, setSorts] = useState<BrowseSort[]>([]);
   const [joins, setJoins] = useState<string[]>([]);
   const [groupBy, setGroupBy] = useState<string[]>([]);
@@ -95,6 +145,15 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
   const [undoState, setUndoState] = useState<UndoStateDto | null>(null);
   const [undoOpen, setUndoOpen] = useState(false);
   const [generateOpen, setGenerateOpen] = useState(false);
+  // Which JSON column somebody wanted to look inside.
+  const [jsonColumn, setJsonColumn] = useState<string | null>(null);
+  // Following the table: which column says what is new, how often to look, and which rows on this
+  // page were not on the last one. The seen keys are a ref: they are read inside a fetch, not
+  // during a render.
+  const [followColumn, setFollowColumn] = useState<string | null>(null);
+  const [followSeconds, setFollowSeconds] = useState(5);
+  const [fresh, setFresh] = useState<ReadonlySet<number>>(new Set());
+  const seenRows = useRef<Set<string>>(new Set());
   // "customer_id.name": a column from the table a foreign key points at, shown next to the id
   // instead of being reached by following it.
   const [lookups, setLookups] = useState<string[]>([]);
@@ -118,6 +177,46 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+  // Only a table with keys can have one row followed through time, and only some engines keep it.
+  useEffect(() => {
+    setHistorySupported(false);
+
+    if (!page || page.keyColumns.length === 0) return;
+
+    let cancelled = false;
+
+    historyAvailable(connectionId, objectRef)
+      .then(state => { if (!cancelled) setHistorySupported(state.supported); })
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [connectionId, objectRef, page?.keyColumns.length]);
+
+  // Following re-fetches the first page, newest first, and nothing else: a tail that also paged
+  // would scroll away from what it is showing.
+  useEffect(() => {
+    if (followColumn === null) return;
+
+    setSorts([{ column: followColumn, desc: true }]);
+    setPageIndex(1);
+
+    const timer = window.setInterval(() => setNonce(n => n + 1), followSeconds * 1000);
+    return () => window.clearInterval(timer);
+  }, [followColumn, followSeconds]);
+
+  // Turning it off forgets what it had seen, so switching it on again does not flash a whole page.
+  useEffect(() => {
+    if (followColumn === null) {
+      seenRows.current = new Set();
+      setFresh(new Set());
+    }
+  }, [followColumn]);
+
+  // Which columns could order a tail at all: a timestamp, a date, or an increasing key.
+  const followable = useMemo(
+    () => page && !page.grouped ? followColumns(page.columns, page.keyColumns) : [],
+    [page]);
+
   const rowAt = useCallback((index: number) => page?.rows[index], [page]);
   const changeSet = useChangeSet(page?.keyColumns ?? [], columns, rowAt);
 
@@ -131,13 +230,26 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
     })
       .then(p => {
         if (cancelled) return;
+
+        // Following: whatever is on this page and was not on the last one is new, and stays marked
+        // until the next fetch.
+        setFresh(followColumn
+          ? newRows(p.rows, p.columns, p.keyColumns, seenRows.current)
+          : new Set<number>());
+
         setPage(p);
-        if (!p.grouped) setAddressable(p.columns.map(c => c.name));
+        if (!p.grouped) setAddressable(p.columns.map(c => c.name).filter(c => c !== ROW_ADDRESS));
       })
       .catch(e => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
+    // followColumn only tints rows; the fetch itself is driven by the states below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, objectRef, pageIndex, pageSize, nonce, filters, sorts, joins, groupBy,
     aggregates, lookups, reveal]);
+
+  // A counted total describes one filter on one table. Anything that changes what is being read
+  // makes it a number about something else.
+  useEffect(() => setExactTotal(null), [connectionId, objectRef, filters, joins, groupBy, aggregates, nonce]);
 
   // Re-read after every apply: what can be undone changes with the data, not with the render.
   useEffect(() => {
@@ -166,7 +278,13 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
   const copy = (text: string) => navigator.clipboard.writeText(text);
   // Hidden columns are dropped from the render, not from the fetch: the row editor still needs
   // the key columns, and the server has no idea what the browser is showing.
-  const visibleColumns = page ? page.columns.filter(c => !hidden.has(c.name)) : [];
+  const visibleColumns = page
+    ? page.columns.filter(c => !hidden.has(c.name) && c.name !== ROW_ADDRESS)
+    : [];
+
+  // What leaves the tab — the clipboard, and anything reading the whole result — without the
+  // address column. The grid keeps it, because the row editor addresses rows by it.
+  const shown = withoutAddress(page.rows, page.columns);
 
   const fkForColumn = (column: string) => foreignKeys.find(fk => fk.columns.includes(column));
   const referencedBy = (column: string) => incoming.some(key =>
@@ -176,6 +294,34 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
   // addressing at all.
   const isLookup = (column: string) => (page?.lookups ?? []).includes(column);
   const isBoolean = (type: string) => /bool|bit/i.test(type);
+
+  // Rows on their way in: what somebody copied out of a spreadsheet becomes pending inserts,
+  // which the preview then shows as the statements they are. Nothing is written by pasting.
+  const pasteRows = async () => {
+    setPasteNote(null);
+    let text = "";
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      setPasteNote("the browser did not allow reading the clipboard");
+      return;
+    }
+
+    const insertable = page.columns.filter(c => c.name !== ROW_ADDRESS && !isLookup(c.name));
+    const parsed = parsePastedRows(text, insertable);
+
+    if (parsed.rows.length === 0) {
+      setPasteNote("there was nothing to paste");
+      return;
+    }
+
+    for (const row of parsed.rows) changeSet.insertRow(row);
+
+    setPasteNote(`${parsed.rows.length} row${parsed.rows.length === 1 ? "" : "s"} pasted` +
+      `${parsed.usedHeader ? " by column name" : ""}` +
+      `${parsed.ignored.length > 0 ? `, ignoring ${parsed.ignored.join(", ")}` : ""}` +
+      " — review them and apply");
+  };
 
   const sortOf = (column: string) => sorts.find(s => s.column.toLowerCase() === column.toLowerCase());
   const boxFilterOf = (column: string) => filters.find(f =>
@@ -188,8 +334,8 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
     setPageIndex(1);
   };
 
-  // The column box's filter is the small expression language (see the server's FilterExpression):
-  // a plain word still means "contains", and the distinct list types `=a,=b` into the same box.
+  // The column box's filter is the small expression language (the server's FilterExpression): a
+  // plain word still means "contains", and the distinct list types `=a,=b` into the same box.
   const setBoxFilter = (column: string, value: string) => {
     setFilters(current => {
       const rest = current.filter(f =>
@@ -216,10 +362,13 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
     });
 
   const insertedRows = Array.from({ length: changeSet.insertedRows }, (_, i) => -(i + 1));
-  const totalPages = page.totalEstimate ? Math.max(1, Math.ceil(page.totalEstimate / pageSize)) : 1;
   // The expander column exists only while somebody points at this table and the view is ungrouped:
   // a grouped row is not a row of the table, so nothing references it.
   const expander = incoming.length > 0 && !page.grouped;
+
+  // An exact count needs a question the count endpoint can be asked: no filter, or one column box.
+  const countable = !page.grouped
+    && (filters.length === 0 || (filters.length === 1 && filters[0].op === "expr"));
 
   const selectedCells = selected
     .map(s => ({ rowIndex: s.row, column: columns[s.col], value: changeSet.editedValue(s.row, columns[s.col]) }))
@@ -245,9 +394,34 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
           <ActionIcon size="sm" variant="subtle" aria-label="Revert" disabled={!changeSet.isDirty}
             onClick={changeSet.revertAll}><IconRestore size={14} /></ActionIcon>
         </Tooltip>
+        {/* Following the table: the newest rows first, re-fetched, and whatever arrived since the
+            last look tinted. Watch mode does this for a query; this is the table's version. */}
+        {followable.length > 0 && (
+          <Tooltip label={followColumn
+            ? `Following ${followColumn}, every ${followSeconds} s`
+            : "Follow this table: newest first, new rows highlighted"}>
+            <Group gap={2} wrap="nowrap">
+              <Select size="xs" w={132} clearable placeholder="follow off"
+                aria-label="Follow column"
+                data={followable.map(name => ({ value: name, label: `follow ${name}` }))}
+                value={followColumn}
+                onChange={(value: string | null) => setFollowColumn(value)} />
+              {followColumn && (
+                <Select size="xs" w={86} aria-label="Follow interval"
+                  data={["2", "5", "10", "30"].map(value => ({ value, label: `${value} s` }))}
+                  value={String(followSeconds)}
+                  onChange={(value: string | null) => setFollowSeconds(Number(value) || 5)} />
+              )}
+            </Group>
+          </Tooltip>
+        )}
         <Tooltip label="Insert row">
           <ActionIcon size="sm" variant="subtle" aria-label="Insert row" disabled={!page.editable}
             onClick={() => changeSet.insertRow({})}><IconPlus size={14} /></ActionIcon>
+        </Tooltip>
+        <Tooltip label="Paste rows from the clipboard as inserts">
+          <ActionIcon size="sm" variant="subtle" aria-label="Paste rows" disabled={!page.editable}
+            onClick={pasteRows}><IconClipboardPlus size={14} /></ActionIcon>
         </Tooltip>
         <Tooltip label="Duplicate selected row">
           <ActionIcon size="sm" variant="subtle" aria-label="Duplicate row"
@@ -288,13 +462,15 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
             </Button>
           </Menu.Target>
           <Menu.Dropdown>
-            <Menu.Item onClick={() => copy(copyAsCsv(page.rows, page.columns))}>
+            {/* Without the row address: it is how the server writes this table, not a column
+                anybody asked for. */}
+            <Menu.Item onClick={() => copy(copyAsCsv(shown.rows, shown.columns))}>
               This page as CSV
             </Menu.Item>
-            <Menu.Item onClick={() => copy(copyAsJson(page.rows, page.columns))}>
+            <Menu.Item onClick={() => copy(copyAsJson(shown.rows, shown.columns))}>
               This page as JSON
             </Menu.Item>
-            <Menu.Item onClick={() => copy(copyAsMarkdown(page.rows, page.columns))}>
+            <Menu.Item onClick={() => copy(copyAsMarkdown(shown.rows, shown.columns))}>
               This page as Markdown
             </Menu.Item>
             <Menu.Divider />
@@ -381,12 +557,15 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
         ) : null}
 
         <Text size="xs" c="dimmed" ml="auto">
-          {page.rows.length} rows
+          {shown.rows.length} rows
           {page.totalEstimate ? ` of ~${page.totalEstimate}` : ""}
           {filters.length > 0 ? ` · filtered on ${[...new Set(filters.map(f => f.column))].join(", ")}` : ""}
           {sorts.length > 0 ? ` · sorted by ${sorts.map(s => s.column).join(", ")}` : ""}
           {page.grouped ? " · grouped" : ""}
           {changeSet.isDirty && ` · ${changeSet.changes.length} pending`}
+          {page.note ? ` · ${page.note}` : ""}
+          {/* Which clock the timestamps are on, whenever it is not the reader's own. */}
+          {describeZone(preferences().timeZone) ? ` · ${describeZone(preferences().timeZone)}` : ""}
         </Text>
       </Group>
 
@@ -403,8 +582,16 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
           setPageIndex(1);
         }} />
 
-      {!page.editable && page.reason && (
-        <Alert color="gray" p={6} mx={4} mb={4}>
+      {pasteNote && (
+        <Alert color="blue" p={6} mx={4} mb={4} withCloseButton onClose={() => setPasteNote(null)}>
+          <Text size="xs">{pasteNote}</Text>
+        </Alert>
+      )}
+
+      {/* Why this table is not editable — or, when it is editable by physical address only,
+          what that costs: the address moves when somebody else writes the row. */}
+      {page.reason && (
+        <Alert color={page.editable ? "yellow" : "gray"} p={6} mx={4} mb={4}>
           <Text size="xs">{page.reason}</Text>
         </Alert>
       )}
@@ -414,8 +601,9 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
           <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "var(--mantine-color-default)" }}>
             <tr>
               {expander && <th style={{ width: 22 }} />}
+              {historySupported && <th style={{ width: 24 }} />}
               {visibleColumns.map(c => (
-                <th key={c.name} style={{
+                <th key={c.name} title={zoneNote(c.dataType) ?? c.dataType} style={{
                   textAlign: "left", padding: "2px 8px", whiteSpace: "nowrap",
                   borderBottom: "1px solid var(--mantine-color-default-border)",
                 }}>
@@ -466,15 +654,26 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
                           onClick={() => { setFilters([]); setPageIndex(1); }}>
                           Clear filters
                         </Menu.Item>
-                        {/* What is actually in this column, as checkboxes. Ticking values writes
-                            them into the box above as `=a,=b` — a way of typing, not a second
-                            filter. Only base columns: the endpoint counts columns of this table. */}
-                        {!isLookup(c.name) && !c.name.includes(".") && <>
-                          <Menu.Divider />
-                          <DistinctValues connectionId={connectionId} objectRef={objectRef}
-                            column={c.name}
-                            onPick={value => setBoxFilter(c.name, value)} />
-                        </>}
+                      </>}
+                      {/* A JSON column is one cell of text in the grid. This says what is inside
+                          it — which paths, how often, with which types — and offers the SELECT that
+                          turns those paths into columns. */}
+                      {jsonish(c.dataType, page.rows.map(row => row[page.columns.indexOf(c)])) && <>
+                        <Menu.Divider />
+                        <Menu.Item leftSection={<IconBraces size={13} />}
+                          onClick={() => setJsonColumn(c.name)}>
+                          What is in this JSON
+                        </Menu.Item>
+                      </>}
+
+                      {/* What is actually in this column, as checkboxes. Ticking values writes them
+                          into the box above as `=a,=b` — a way of typing, not a second filter. Only
+                          the table's own columns: the endpoint counts columns of this table. */}
+                      {!page.grouped && !isLookup(c.name) && !c.name.includes(".") && <>
+                        <Menu.Divider />
+                        <DistinctValues connectionId={connectionId} objectRef={objectRef}
+                          column={c.name}
+                          onPick={value => setBoxFilter(c.name, value)} />
                       </>}
 
                       {/* A column from the other side of the key, shown here rather than reached by
@@ -547,6 +746,7 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
                         state={changeSet.cellState(rowIndex, c.name)}
                         editable={page.editable && !isLookup(c.name)}
                         boolean={isBoolean(c.dataType)}
+                        binary={isBinary(c.dataType)}
                         lookup={fk ? text => lookupValues(
                           connectionId, foreignKeyRef(fk), fk.referencedColumns[0], text) : undefined}
                         onCommit={value => changeSet.edit(rowIndex, c.name, value)} />
@@ -564,7 +764,12 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
               });
 
               return [
-                <tr key={rowIndex}>
+                <tr key={rowIndex}
+                  // A row that has just arrived is tinted until the next fetch: that is the whole
+                  // point of following a table.
+                  style={fresh.has(rowIndex)
+                    ? { background: "var(--mantine-primary-color-light)" }
+                    : undefined}>
                   {expander && (
                     <td style={{ borderBottom: "1px solid var(--mantine-color-default-border)", padding: 0 }}>
                       {/* One incoming key toggles directly; several ask which — each one, or all
@@ -609,11 +814,28 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
                       )}
                     </td>
                   )}
+                  {historySupported && (
+                    <td style={{
+                      padding: "1px 4px",
+                      borderBottom: "1px solid var(--mantine-color-default-border)",
+                    }}>
+                      <Tooltip label="What this row looked like before">
+                        <ActionIcon size="xs" variant="subtle"
+                          aria-label={`History of row ${rowIndex + 1}`}
+                          onClick={() => setHistoryOf(Object.fromEntries(page.keyColumns.map(column => [
+                            column,
+                            String(row[page.columns.findIndex(one => one.name === column)] ?? ""),
+                          ])))}>
+                          <IconHistory size={12} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </td>
+                  )}
                   {cells}
                 </tr>,
                 ...(expandedKeys.length > 0 ? [(
                   <tr key={`${rowIndex}-refs`}>
-                    <td colSpan={visibleColumns.length + 1}
+                    <td colSpan={visibleColumns.length + 1 + (historySupported ? 1 : 0)}
                       style={{ borderBottom: "1px solid var(--mantine-color-default-border)" }}>
                       {incoming.filter(key => expandedKeys.includes(key.name)).map(key => (
                         <ReferencingRows key={key.name}
@@ -632,6 +854,7 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
             {insertedRows.map(index => (
               <tr key={index} style={{ background: "color-mix(in srgb, var(--mantine-color-green-6) 8%, transparent)" }}>
                 {expander && <td />}
+                {historySupported && <td />}
                 {visibleColumns.map(c => (
                   <td key={c.name} style={{ padding: "1px 8px", whiteSpace: "nowrap" }}>
                     <EditableCell
@@ -648,11 +871,42 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
         </table>
       </div>
 
-      {totalPages > 1 && (
-        <Group justify="center" py={4}>
-          <Pagination size="xs" total={totalPages} value={pageIndex} onChange={setPageIndex} />
-        </Group>
+      <Pager
+        page={pageIndex}
+        pageSize={pageSize}
+        rowsOnPage={shown.rows.length}
+        total={exactTotal ?? page.totalEstimate}
+        totalIsEstimate={exactTotal === null && (page.totalIsEstimate ?? false)}
+        filtered={exactTotal === null && (page.filtered ?? false)}
+        onPage={setPageIndex}
+        onPageSize={size => {
+          // The first row on screen stays on screen: changing the size on page 14 of 200-row pages
+          // and landing on page 14 of 25-row pages would be a different part of the table.
+          const firstRow = (pageIndex - 1) * pageSize;
+          setPageIndex(Math.floor(firstRow / size) + 1);
+          void savePreferences({ pageSize: size });
+        }}
+        counting={counting}
+        // The count endpoint answers one column box on one table; a grouped or many-filtered view
+        // has no honest question to ask it.
+        onCount={countable ? async () => {
+          setCounting(true);
+          try {
+            const box = filters.find(f => f.op === "expr");
+            const answer = await countRows(connectionId, objectRef,
+              { filterColumn: box?.column, filter: box?.value });
+            setExactTotal(answer.total);
+          } catch { /* the number stays what it was; the grid is not the place for this error */ }
+          finally { setCounting(false); }
+        } : undefined} />
+
+      {jsonColumn && (
+        <JsonColumnDialog connectionId={connectionId} objectRef={objectRef} column={jsonColumn}
+          onClose={() => setJsonColumn(null)} onFlatten={onOpenInEditor} />
       )}
+
+      <RowHistoryModal connectionId={connectionId} objectRef={objectRef} keyValues={historyOf}
+        label={tableName} onClose={() => setHistoryOf(null)} />
 
       <GenerateDialog connectionId={connectionId} objectRef={objectRef} tableName={tableName}
         opened={generateOpen} onClose={() => setGenerateOpen(false)}

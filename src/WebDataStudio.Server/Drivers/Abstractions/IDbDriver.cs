@@ -8,6 +8,13 @@ public interface IDbSession : IAsyncDisposable
 {
     ConnectionSpec Spec { get; }
     DbConnection Connection { get; }
+
+    /// A transaction somebody opened on this session and will close themselves — the query tab's
+    /// transaction mode. A driver enlists its statements in it instead of opening one of its own,
+    /// and never commits or rolls it back: that is the caller's to do.
+    ///
+    /// Null on every engine that has no transactions, which is what the default says.
+    DbTransaction? Ambient { get => null; set { } }
 }
 
 /// A session that stands in front of another one — the pool and the SSH tunnel both do that.
@@ -35,13 +42,37 @@ public interface IDbDriver
     Task<IDbSession> OpenAsync(ConnectionSpec spec, CancellationToken ct);
 
     /// One level of the object tree. `parent` is null for the root of the connection.
-    Task<IReadOnlyList<SchemaNode>> IntrospectAsync(IDbSession session, SchemaNodeRef? parent, CancellationToken ct);
+    ///
+    /// `systemObjects` asks for what the engine keeps for itself as well — `sys` and the fixed role
+    /// schemas on SQL Server, `pg_catalog` on PostgreSQL, `SYS` on Oracle, the `sqlite_%` tables.
+    /// Off by default, and every caller but the explorer tree leaves it off: a data dictionary, a
+    /// schema snapshot or a comparison that walked the catalogue would be worse for it.
+    Task<IReadOnlyList<SchemaNode>> IntrospectAsync(IDbSession session, SchemaNodeRef? parent,
+        CancellationToken ct, bool systemObjects = false);
 
     Task<ObjectDetail> DescribeAsync(IDbSession session, SchemaNodeRef target, CancellationToken ct);
 
     IAsyncEnumerable<ResultChunk> ExecuteAsync(IDbSession session, ScriptRequest request, CancellationToken ct);
 
     Task<PlanNode> ExplainAsync(IDbSession session, string sql, PlanMode mode, CancellationToken ct);
+
+    /// What to select from for this object. A database returns the qualified name; object storage
+    /// returns a reader over the file, which is the same thing said differently. Null means nothing
+    /// here reads it, and the UI offers a preview instead of a query that would fail.
+    string? FromClause(IDbSession session, SchemaNodeRef target) =>
+        target.Path.Count > 1
+            ? $"{Dialect.QuoteIdentifier(target.Path[0])}.{Dialect.QuoteIdentifier(target.Name)}"
+            : Dialect.QuoteIdentifier(target.Name);
+
+    /// A page of rows for an engine that has no SQL to build one with.
+    ///
+    /// Null — the default — means "build the SELECT the way you always did", which is every SQL
+    /// engine and a file in a bucket. MongoDB and Redis answer instead: a collection is documents
+    /// projected onto the shape the driver sampled, a Redis database is its keys with their types and
+    /// their expiry, and a Redis key is its own contents. Without this the data tab sent
+    /// `SELECT * FROM "sessions"` to MongoDB, which is not a sentence it knows.
+    Task<TabularPage?> PageAsync(IDbSession session, SchemaNodeRef target, PageQuery query,
+        CancellationToken ct) => Task.FromResult<TabularPage?>(null);
 
     Task<AnalyzeReport> AnalyzeAsync(IDbSession session, AnalyzeScope scope, SchemaNodeRef? target, CancellationToken ct);
 }

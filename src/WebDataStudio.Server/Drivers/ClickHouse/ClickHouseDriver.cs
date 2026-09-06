@@ -9,6 +9,31 @@ public sealed class ClickHouseDialect : SqlDialect
     public override string QuoteIdentifier(string name) => "`" + name.Replace("`", "``") + "`";
     public override string ParameterPrefix => "@";
     public override string Paginate(string sql, int offset, int limit) => $"{sql} LIMIT {limit} OFFSET {offset}";
+
+    /// ClickHouse takes the path as a list of keys rather than as a JSONPath string.
+    public override string JsonPath(string column, string path)
+    {
+        var steps = path.Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .SelectMany(step => step.EndsWith("[]", StringComparison.Ordinal)
+                ? new[] { step[..^2], "1" }
+                : [step])
+            .Select(step => long.TryParse(step, out _) ? step : QuoteLiteral(step));
+
+        return $"JSONExtractString({column}, {string.Join(", ", steps)})";
+    }
+
+
+    // ClickHouse names its own widths, and a column that may be empty has to say Nullable.
+    public override string BooleanType => "Nullable(Bool)";
+    public override string SmallIntType => "Nullable(Int16)";
+    public override string IntType => "Nullable(Int32)";
+    public override string BigIntType => "Nullable(Int64)";
+    public override string DoubleType => "Nullable(Float64)";
+    public override string DateType => "Nullable(Date)";
+    public override string TimeType => "Nullable(String)";
+    public override string TimestampType => "Nullable(DateTime)";
+    public override string DecimalType(string duckdbType) => "Nullable(Decimal(38, 6))";
+
 }
 
 public sealed class ClickHouseDriver : AdoDriverBase
@@ -35,13 +60,15 @@ public sealed class ClickHouseDriver : AdoDriverBase
     }
 
     public override async Task<IReadOnlyList<SchemaNode>> IntrospectAsync(
-        IDbSession session, SchemaNodeRef? parent, CancellationToken ct)
+        IDbSession session, SchemaNodeRef? parent, CancellationToken ct, bool systemObjects = false)
     {
         if (parent is null)
             return await QueryAsync(session, ct,
-                """
+                $"""
                 SELECT name FROM system.databases
-                 WHERE name NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')
+                 WHERE {(systemObjects
+                     ? "1"
+                     : "name NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema')")}
                  ORDER BY name
                 """,
                 name => new SchemaNode(new SchemaNodeRef(SchemaNodeKind.Schema, [name]), name, true));

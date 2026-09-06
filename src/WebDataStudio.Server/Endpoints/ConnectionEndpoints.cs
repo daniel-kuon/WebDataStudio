@@ -1,4 +1,6 @@
 using WebDataStudio.Server.Drivers;
+using WebDataStudio.Server.Drivers.Abstractions;
+using WebDataStudio.Server.Drivers.Storage;
 using WebDataStudio.Server.Models;
 using WebDataStudio.Server.Services;
 
@@ -12,6 +14,24 @@ public static class ConnectionEndpoints
     public static void MapConnectionEndpoints(this WebApplication app)
     {
         var api = app.MapGroup("/api/connections");
+
+        // --- presets and the interactive Entra sign-in -----------------------
+        // The connection strings nobody remembers, and the flow for the ones a person signs in to.
+        app.MapGet("/api/connection-presets", (string? engine) =>
+            Results.Ok(ConnectionPresets.For(engine)));
+
+        // Starts a device-code sign-in and returns at once: the code arrives on the next poll,
+        // because the person needs a moment to get to a browser.
+        api.MapPost("/{id}/entra/signin", (string id, string? tenant, EntraSignIn entra,
+            CancellationToken ct) => Results.Ok(entra.Start(id, tenant, ct)));
+
+        api.MapGet("/{id}/entra", (string id, EntraSignIn entra) => Results.Ok(entra.Status(id)));
+
+        api.MapDelete("/{id}/entra", (string id, EntraSignIn entra) =>
+        {
+            entra.SignOut(id);
+            return Results.NoContent();
+        });
 
         api.MapGet("/", (ConnectionRegistry registry) =>
             Results.Ok(registry.All().Select(ConnectionRegistry.ToDto)));
@@ -164,6 +184,59 @@ public static class ConnectionEndpoints
             return Results.Ok(new { imported, skipped });
         });
 
+        // Is this server still there, and how far away is it? Asked about a connection that
+        // already exists, so nothing has to be typed and nothing is stored: the answer is one
+        // round trip, now.
+        //
+        // A pool makes opening a session nearly free, which would make every server look equally
+        // close. So the probe runs the smallest statement the engine has and times that.
+        api.MapGet("/{id}/health", async (string id, SessionFactory factory, CancellationToken ct) =>
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+
+            // A dot that spins for twenty seconds has already failed to say what it is for. A
+            // server that has not answered in ten is the answer.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(10));
+            ct = deadline.Token;
+
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(id, ct);
+                await using (session)
+                {
+                    var note = await ProbeAsync(driver, session, ct);
+                    clock.Stop();
+
+                    return Results.Ok(new
+                    {
+                        ok = true,
+                        milliseconds = (int)clock.ElapsedMilliseconds,
+                        message = note ?? $"connected to {driver.Info.Label}",
+                    });
+                }
+            }
+            catch (UnknownConnectionException e)
+            {
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Exception e)
+            {
+                clock.Stop();
+
+                // A server that is down is information, not a fault of this one: 200 with ok=false
+                // keeps the explorer's dot simple.
+                return Results.Ok(new
+                {
+                    ok = false,
+                    milliseconds = (int)clock.ElapsedMilliseconds,
+                    message = deadline.IsCancellationRequested && e is OperationCanceledException
+                        ? "no answer within 10 seconds"
+                        : e.Message,
+                });
+            }
+        });
+
         api.MapPost("/test", async (ConnectionRequest body, DriverRegistry drivers,
             TunnelManager tunnels, CancellationToken ct) =>
         {
@@ -189,6 +262,24 @@ public static class ConnectionEndpoints
                 var spec = new ConnectionSpec("probe", body.Name, body.Engine, connectionString,
                     true, null, null, ConnectionSource.Stored);
                 await using var session = await driver.OpenAsync(spec, ct);
+
+                // Opening a storage connection proves nothing: it builds a client and a DuckDB and
+                // never touches the bucket. So the probe lists a page — "connected" for a bucket
+                // that does not exist would be the most annoying kind of green tick.
+                if (session.Unwrap() is StorageSession storage)
+                {
+                    var page = await storage.Store.ListAsync("", null, 5, ct);
+                    var folders = page.Entries.Count(entry => entry.IsPrefix);
+
+                    return Results.Ok(new
+                    {
+                        ok = true,
+                        message = $"reached {storage.Store.Target.Container}: "
+                                  + $"{page.Entries.Count - folders} object(s), {folders} folder(s)"
+                                  + (page.Cursor is null ? "" : " and more"),
+                    });
+                }
+
                 return Results.Ok(new { ok = true, message = $"connected to {driver.Info.Label}" });
             }
             catch (Exception e)
@@ -220,6 +311,31 @@ public static class ConnectionEndpoints
 
         return new PortableConnection(spec.Name, spec.Engine, spec.ReadOnly, spec.Color, spec.Group,
             Value("Host", "Server", "Data Source"), Value("Database", "Initial Catalog"), true);
+    }
+
+    /// One round trip that proves the server is answering, not merely that a pooled connection
+    /// object exists. Returns a note worth showing, or null for "nothing to add".
+    ///
+    /// Opening a storage connection proves nothing at all — it builds a client and a DuckDB and
+    /// never touches the bucket — so that one lists a page instead.
+    private static async Task<string?> ProbeAsync(IDbDriver driver, IDbSession session,
+        CancellationToken ct)
+    {
+        if (session.Unwrap() is StorageSession storage)
+        {
+            var page = await storage.Store.ListAsync("", null, 1, ct);
+            return $"reached {storage.Store.Target.Container}: {page.Entries.Count} entry(ies)";
+        }
+
+        if (!driver.Caps.Sql) return null;
+
+        await foreach (var chunk in driver.ExecuteAsync(session,
+            new ScriptRequest(driver.Dialect.Ping, 1, 10), ct))
+        {
+            if (chunk is ResultChunk.Error error) throw new InvalidOperationException(error.Text);
+        }
+
+        return null;
     }
 
     private static IResult EnvironmentIsReadOnly() =>

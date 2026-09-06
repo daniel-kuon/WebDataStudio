@@ -10,6 +10,10 @@ public sealed class AdoSession(ConnectionSpec spec, DbConnection connection) : I
 {
     public ConnectionSpec Spec { get; } = spec;
     public DbConnection Connection { get; } = connection;
+
+    /// Set while a query tab holds a transaction open on this session; see OpenTransactions.
+    public DbTransaction? Ambient { get; set; }
+
     public async ValueTask DisposeAsync() => await Connection.DisposeAsync();
 }
 
@@ -24,8 +28,14 @@ public abstract class AdoDriverBase : IDbDriver
     public abstract SqlDialect Dialect { get; }
 
     public abstract Task<IDbSession> OpenAsync(ConnectionSpec spec, CancellationToken ct);
-    public abstract Task<IReadOnlyList<SchemaNode>> IntrospectAsync(IDbSession session, SchemaNodeRef? parent, CancellationToken ct);
+    public abstract Task<IReadOnlyList<SchemaNode>> IntrospectAsync(IDbSession session, SchemaNodeRef? parent,
+        CancellationToken ct, bool systemObjects = false);
     public abstract Task<ObjectDetail> DescribeAsync(IDbSession session, SchemaNodeRef target, CancellationToken ct);
+
+    public virtual string? FromClause(IDbSession session, SchemaNodeRef target) =>
+        target.Path.Count > 1
+            ? $"{Dialect.QuoteIdentifier(target.Path[0])}.{Dialect.QuoteIdentifier(target.Name)}"
+            : Dialect.QuoteIdentifier(target.Name);
 
     public virtual Task<PlanNode> ExplainAsync(IDbSession session, string sql, PlanMode mode, CancellationToken ct) =>
         throw new NotSupportedException($"{Info.Label} does not support execution plans");
@@ -39,11 +49,17 @@ public abstract class AdoDriverBase : IDbDriver
         ct.ThrowIfCancellationRequested();
         var statements = StatementSplitter.Split(request.Sql, Dialect);
 
-        // One transaction around the whole script: a failing statement halfway through leaves
-        // nothing behind, which is what "run this migration" needs.
-        var transaction = request.Transactional && Caps.Transactions
+        // A transaction the caller holds open — the query tab's transaction mode — is joined
+        // rather than nested: the statements enlist in it, and committing it is not this method's
+        // business. Otherwise, one transaction around the whole script: a failing statement halfway
+        // through leaves nothing behind, which is what "run this migration" needs.
+        var ambient = session.Unwrap().Ambient;
+
+        var transaction = ambient ?? (request.Transactional && Caps.Transactions
             ? await session.Connection.BeginTransactionAsync(ct)
-            : null;
+            : null);
+
+        var owned = ambient is null && transaction is not null;
 
         var failed = false;
 
@@ -67,12 +83,16 @@ public abstract class AdoDriverBase : IDbDriver
                     yield return chunk;
                 }
 
-                if (failed && transaction is not null) yield break;
+                // A failure inside a transaction poisons what follows — PostgreSQL refuses every
+                // later statement outright — so a transaction always stops. Without one, "keep
+                // going" is the caller's to decide.
+                if (failed && (transaction is not null || !request.ContinueOnError)) yield break;
             }
         }
         finally
         {
-            if (transaction is not null)
+            // Only what this method opened is closed here. A held transaction outlives the request.
+            if (owned && transaction is not null)
             {
                 if (failed) await transaction.RollbackAsync(CancellationToken.None);
                 else await transaction.CommitAsync(CancellationToken.None);

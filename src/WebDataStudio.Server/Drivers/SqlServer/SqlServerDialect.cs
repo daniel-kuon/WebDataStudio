@@ -20,4 +20,15 @@ public sealed class SqlServerDialect : SqlDialect
         sql.Contains("order by", StringComparison.OrdinalIgnoreCase)
             ? $"{sql} OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY"
             : $"{sql} ORDER BY (SELECT NULL) OFFSET {offset} ROWS FETCH NEXT {limit} ROWS ONLY";
+
+    /// JSON_VALUE reads a scalar; an array step takes the first element, because a flattened column
+    /// holds one value.
+    public override string JsonPath(string column, string path) =>
+        $"JSON_VALUE({column}, '{JsonPathLiteral(path).Replace("[*]", "[0]")}')";
+
+
+    public override string BooleanType => "BIT";
+    public override string DoubleType => "FLOAT";
+    public override string TimestampType => "DATETIME2";
+
 }

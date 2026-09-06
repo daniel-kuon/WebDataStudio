@@ -41,6 +41,19 @@ public static class SchemaEndpoints
                         driver, session, ParseObjectRef(objectRef), ct));
             }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -58,6 +71,19 @@ public static class SchemaEndpoints
                         driver, session, ParseObjectRef(objectRef), ct));
             }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -75,6 +101,19 @@ public static class SchemaEndpoints
                         driver, session, ParseObjectRef(objectRef), ct));
             }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -103,6 +142,19 @@ public static class SchemaEndpoints
             catch (ArgumentException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (NotSupportedException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -121,6 +173,19 @@ public static class SchemaEndpoints
                         driver, session, ParseObjectRef(objectRef), ct));
             }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -148,6 +213,19 @@ public static class SchemaEndpoints
                         driver, session, ParseObjectRef(objectRef), ct));
             }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -217,6 +295,19 @@ public static class SchemaEndpoints
             }
             catch (ArgumentException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -243,6 +334,50 @@ public static class SchemaEndpoints
                         : null,
                 }));
 
+        // "What do I run on the other machine": the statements that would carry a database from
+        // the snapshot's schema to this one. Nothing runs here — it lands in a query tab, and the
+        // apply endpoint is the one that executes.
+        app.MapGet("/api/schema/{conn}/drift/script", async (string conn, SchemaSnapshots snapshots,
+            SessionFactory factory, CancellationToken ct) =>
+        {
+            if (!snapshots.Configured)
+                return Results.BadRequest(new
+                {
+                    message = "no snapshot directory is configured; set WDS_SCHEMA_SNAPSHOT_DIR",
+                });
+
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    var writer = DdlEndpoints.WriterFor(driver.Info.Id);
+
+                    if (writer is null)
+                        return Results.BadRequest(new
+                        {
+                            message = $"the studio writes no DDL for {driver.Info.Label}",
+                        });
+
+                    var before = snapshots.Saved(conn);
+                    var after = await snapshots.TakeAsync(conn, conn, ct);
+
+                    var script = await DriftMigration.BuildAsync(driver, session, writer, before, after, ct);
+
+                    return Results.Ok(new
+                    {
+                        before = before?.At,
+                        script = script.Text,
+                        script.Destructive,
+                        needsAPerson = script.NeedsAPerson,
+                        statements = script.Statements.Count,
+                    });
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
         // Takes one now rather than waiting for the next start — the button behind "did my
         // migration do what I think it did".
         app.MapPost("/api/schema/snapshot", async (SchemaSnapshots snapshots, CancellationToken ct) =>
@@ -253,11 +388,105 @@ public static class SchemaEndpoints
                     message = "no snapshot directory is configured; set WDS_SCHEMA_SNAPSHOT_DIR",
                 }));
 
+        // "Find 4711 in any table." The object search says where a table is; this says where a value
+        // is, server-side and type-aware — a number is compared as a number, and a column that
+        // cannot hold the value is not scanned at all.
+        app.MapGet("/api/search/{conn}/data", async (string conn, string value, string? schema,
+            bool? exact, int? maxTables, int? timeoutSeconds, SessionFactory factory,
+            CancellationToken ct) =>
+        {
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    if (!driver.Caps.Sql)
+                        return Results.BadRequest(new
+                        {
+                            message = $"{driver.Info.Label} has no tables to search",
+                        });
+
+                    return Results.Ok(await DataSearch.RunAsync(driver, session, value, schema,
+                        exact ?? false, maxTables ?? DataSearch.DefaultMaxTables,
+                        timeoutSeconds ?? 30, ct));
+                }
+            }
+            catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (OperationCanceledException) { return Results.NoContent(); }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
+        // Which schemas this connection reads, and the whole list to choose from. The deployment can
+        // fix the scope with WDS_CONN_<NAME>_SCHEMAS, and then this only reports it.
+        app.MapGet("/api/schema/{conn}/scope", async (string conn, SessionFactory factory,
+            SchemaScope scope, ConnectionRegistry connections, CancellationToken ct) =>
+        {
+            var spec = connections.Find(conn);
+            if (spec is null) return Results.NotFound(new { message = $"no connection '{conn}'" });
+
+            var fixedByEnvironment = scope.FromEnvironment(spec.Name);
+
+            try
+            {
+                var (driver, session) = await factory.OpenAsync(conn, ct);
+                await using (session)
+                {
+                    var systemObjects = scope.SystemObjects(spec.Id);
+
+                    var all = (await driver.IntrospectAsync(session, null, ct, systemObjects))
+                        .Where(node => node.Ref.Kind is SchemaNodeKind.Schema or SchemaNodeKind.Database)
+                        .Select(node => node.Label)
+                        .ToList();
+
+                    return Results.Ok(new
+                    {
+                        available = all,
+                        chosen = scope.Chosen(spec.Id),
+                        fixedByEnvironment,
+                        editable = fixedByEnvironment.Count == 0,
+                        systemObjects,
+                    });
+                }
+            }
+            catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
+        });
+
+        app.MapPut("/api/schema/{conn}/scope", (string conn, string[] body, SchemaScope scope,
+            ConnectionRegistry connections) =>
+        {
+            var spec = connections.Find(conn);
+            if (spec is null) return Results.NotFound(new { message = $"no connection '{conn}'" });
+
+            if (scope.FromEnvironment(spec.Name).Count > 0)
+                return Results.BadRequest(new
+                {
+                    message = "this connection's schemas are fixed by WDS_CONN_"
+                              + spec.Name.ToUpperInvariant() + "_SCHEMAS",
+                });
+
+            scope.Choose(spec.Id, body);
+            return Results.Ok(new { chosen = body });
+        });
+
+        // Whether this connection also shows what the engine keeps for itself. Separate from the
+        // scope above because it is a different question: the scope narrows what a person wrote,
+        // this one widens the tree to what the engine wrote.
+        app.MapPut("/api/schema/{conn}/system", (string conn, bool show, SchemaScope scope,
+            ConnectionRegistry connections) =>
+        {
+            var spec = connections.Find(conn);
+            if (spec is null) return Results.NotFound(new { message = $"no connection '{conn}'" });
+
+            scope.ShowSystemObjects(spec.Id, show);
+            return Results.Ok(new { systemObjects = show });
+        });
+
         app.MapGet("/api/drivers", (DriverRegistry drivers) =>
             Results.Ok(drivers.All().Select(d => new { d.Info, d.Caps })));
 
         app.MapGet("/api/schema/{conn}", async (string conn, string? parent,
-            SessionFactory factory, CancellationToken ct) =>
+            SessionFactory factory, SchemaScope scope, ConnectionRegistry connections,
+            CancellationToken ct) =>
         {
             try
             {
@@ -265,7 +494,15 @@ public static class SchemaEndpoints
                 await using (session)
                 {
                     var parentRef = string.IsNullOrEmpty(parent) ? null : SchemaNodeRef.Parse(parent);
-                    var nodes = await driver.IntrospectAsync(session, parentRef, ct);
+                    var spec = connections.Find(conn);
+
+                    var nodes = await driver.IntrospectAsync(session, parentRef, ct,
+                        spec is not null && scope.SystemObjects(spec.Id));
+
+                    // A server with five thousand tables should not make every studio pay for all of
+                    // them. Where somebody named the schemas they work in, the rest is not listed.
+                    if (parentRef is null && spec is not null)
+                        nodes = scope.Filter(new ConnectionSpecName(spec.Id, spec.Name), nodes);
 
                     // Every driver stops at the object itself. Its columns, indexes, keys and
                     // triggers are already in DescribeAsync, so the tree grows one level deeper
@@ -284,6 +521,19 @@ public static class SchemaEndpoints
                 }
             }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });
@@ -303,6 +553,19 @@ public static class SchemaEndpoints
                     return Results.Ok(await driver.DescribeAsync(session, ParseObjectRef(objectRef), ct));
             }
             catch (UnknownConnectionException e) { return Results.NotFound(new { message = e.Message }); }
+            catch (Storage.StorageContainerMissingException e)
+            {
+                // A bucket the connection names and the account does not have: the tree says
+                // that sentence rather than the provider's page of XML about it.
+                return Results.NotFound(new { message = e.Message });
+            }
+            catch (Storage.StorageUnreachableException e)
+            {
+                // Not this studio's fault and not a bad request: something it depends on
+                // stopped answering, which is what 504 is for.
+                return Results.Json(new { message = e.Message },
+                    statusCode: StatusCodes.Status504GatewayTimeout);
+            }
             catch (FormatException e) { return Results.BadRequest(new { message = e.Message }); }
             catch (Exception e) { return Results.Json(new { message = e.Message }, statusCode: 502); }
         });

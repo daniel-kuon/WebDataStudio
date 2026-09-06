@@ -10,6 +10,12 @@ public sealed class OracleDialect : SqlDialect
     public override string QuoteIdentifier(string name) => "\"" + name.Replace("\"", "\"\"") + "\"";
     public override string TextType => "VARCHAR2(4000)";
 
+    // Oracle has no SELECT without a FROM.
+    public override string Ping => "SELECT 1 FROM dual";
+
+    public override string? RowAddress => "ROWID";
+    public override string RowAddressPredicate(string parameter) => $"ROWID = CHARTOROWID({parameter})";
+
     public override string NumberCast => "CAST({0} AS NUMBER)";
 
     // Oracle reads a timestamp by the session's NLS format, which is not something to rely on, so
@@ -30,6 +36,22 @@ public sealed class OracleDialect : SqlDialect
     /// Oracle folds unquoted identifiers to upper case, so the designer and introspection must
     /// agree on which spelling they compare.
     public static string NormalizeIdentifier(string name) => name.ToUpperInvariant();
+
+    /// Oracle's own JSON_VALUE, which wants the path as a literal and an array index rather than a
+    /// wildcard.
+    public override string JsonPath(string column, string path) =>
+        $"JSON_VALUE({column}, '{JsonPathLiteral(path).Replace("[*]", "[0]")}')";
+
+
+    // Oracle: NUMBER for everything numeric, and no BOOLEAN in a table before 23c.
+    public override string BooleanType => "NUMBER(1)";
+    public override string SmallIntType => "NUMBER(5)";
+    public override string IntType => "NUMBER(10)";
+    public override string BigIntType => "NUMBER(19)";
+    public override string DoubleType => "BINARY_DOUBLE";
+    public override string TimeType => "TIMESTAMP";
+    public override string DecimalType(string duckdbType) => "NUMBER";
+
 }
 
 public sealed class OracleDriver : AdoDriverBase
@@ -57,13 +79,15 @@ public sealed class OracleDriver : AdoDriverBase
     }
 
     public override async Task<IReadOnlyList<SchemaNode>> IntrospectAsync(
-        IDbSession session, SchemaNodeRef? parent, CancellationToken ct)
+        IDbSession session, SchemaNodeRef? parent, CancellationToken ct, bool systemObjects = false)
     {
+        // An Oracle schema is a user, and an install ships dozens of them — SYS, SYSTEM, XDB and
+        // the rest. The server flags them itself, which is a better list than any hard-coded one.
         if (parent is null)
             return await QueryAsync(session, ct,
-                """
+                $"""
                 SELECT username FROM all_users
-                 WHERE oracle_maintained = 'N'
+                 WHERE {(systemObjects ? "1 = 1" : "oracle_maintained = 'N'")}
                  ORDER BY username
                 """,
                 name => new SchemaNode(new SchemaNodeRef(SchemaNodeKind.Schema, [name]), name, true));

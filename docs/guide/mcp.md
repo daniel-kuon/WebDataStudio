@@ -62,17 +62,49 @@ deployment from a terminal.
 | `list_tables` | every table and view of a connection in one call — the usual first question |
 | `list_objects` | walks the object tree a level at a time, for a database too large to list |
 | `describe_object` | columns, indexes, foreign keys, triggers, row count, and which columns are masked |
-| `browse_rows` | a page of rows from one table, masked and capped |
+| `browse_rows` | a page of rows from a table, view, collection or key space — sortable and filterable, masked and capped |
+| `list_accounts` | the server's own accounts and roles, who is in which role, and what one of them was granted |
 | `run_query` | one **reading** statement, masked and capped |
 | `preview_script` | splits a script, marks the destructive statements, returns a hash. Nothing runs |
 | `explain_plan` | the query plan for a statement — why it is slow, without guessing |
 | `health_report` | the studio's own analysis, each finding with the statement that fixes it |
 | `server_activity` | what is running, and who is waiting on whom |
 | `redis_value` | one Redis key, in the shape its type has |
+| `find_data` | looks for a value in every text column of every table — where does this customer number actually live |
+| `json_shape` | what is inside a JSON column: which paths, how often, which types, and the SELECT that flattens them |
+| `table_sizes` | how big every table is, and how much bigger than it was, with a per-day rate |
+| `query_stats` | what this studio has run, grouped by shape, and whether it is getting slower |
+| `inspect_sql` | reads a statement without running it: a DELETE with no WHERE, a cartesian join, a NOT IN that a NULL will break |
+| `profile_table` | what a table actually holds, counted — and which columns look like they hold something personal |
+| `object_notes` | the notes people left on an object in this studio |
+| `quality_rules` | the rules somebody wrote about this connection's data |
+| `run_quality_rules` | runs them and says how many rows break each one |
+| `preview_script` | splits a script, marks the destructive statements, returns a hash. Nothing runs |
 | `apply_script` | runs the script that hash belongs to |
+| `save_quality_rule` | writes a rule about the data, so what was found once is watched from then on |
+| `add_note` | leaves a note on an object, so what was worked out once is next to the thing it is about |
 
-`preview_script` and `apply_script` exist only when `WDS_MCP_ALLOW_WRITE=true`; otherwise they are
-not in `tools/list` at all, and calling them by name says why.
+`preview_script`, `apply_script`, `save_quality_rule` and `add_note` exist only when
+`WDS_MCP_ALLOW_WRITE=true`; otherwise they are not in `tools/list` at all, and calling them by name
+says why. The last two change the studio's own state rather than the database, but they are writes and
+are treated as ones. A note left by an agent is signed `mcp`, because a note from an agent should not
+read as though a person wrote it.
+
+**MongoDB and Redis need no separate tools either.** `browse_rows` asks the driver for the page, so
+a collection is read with a `find`, a Redis database answers with its keys and their types and a Redis
+key with its own contents. Along with `limit` and `offset` it takes `sort`, `desc`, `filterColumn` and
+`filter` — the same [filter language](results.md#the-filter-language) a person types — and answers
+with the total where the engine can say it cheaply, plus a `note` for anything it could not do.
+`redis_value` is still there for one key's value with its nesting intact.
+
+**A bucket needs no separate tools.** [Object storage](storage.md) is a connection like any other, so
+`list_tables` lists its objects, `describe_object` describes a Parquet file's columns, and
+`browse_rows` reads it through the reader that opens it — `read_parquet`, `read_csv_auto`,
+`read_json_auto` — rather than as a table with that name.
+
+**What is deliberately not offered.** The audit trail is for the people who run the studio, not for an
+agent, and the [development subset](explorer.md#a-development-subset) hands out a file full of rows —
+both stay where a person has to ask for them.
 
 ## Narrowing the endpoint
 
