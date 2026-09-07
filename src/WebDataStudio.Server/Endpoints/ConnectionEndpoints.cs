@@ -37,10 +37,11 @@ public static class ConnectionEndpoints
             Results.Ok(registry.All().Select(ConnectionRegistry.ToDto)));
 
         api.MapPost("/", (ConnectionRequest body, HttpContext ctx, ConnectionStore store,
-            SessionConnections sessions, StudioAccess access) =>
+            SessionConnections sessions, StudioAccess access, ConnectHosts hosts) =>
         {
             if (!access.MayAdd) return AddingIsClosed();
             if (Validate(body) is { } error) return error;
+            if (Unreachable(hosts, body) is { } refused) return refused;
 
             var draft = new ConnectionSpec("", body.Name.Trim(), body.Engine, body.ConnectionString,
                 body.ReadOnly, body.Color, body.Group, ConnectionSource.Stored, body.Tunnel);
@@ -73,13 +74,14 @@ public static class ConnectionEndpoints
 
         api.MapPut("/{id}", async (string id, ConnectionRequest body, HttpContext ctx,
             ConnectionRegistry registry, ConnectionStore store, SessionConnections sessions,
-            SessionPool pool) =>
+            SessionPool pool, ConnectHosts hosts) =>
         {
             // `Find` only answers with what this request may see, so somebody else's session
             // connection is a 404 here rather than a refusal that would confirm it exists.
             if (registry.Find(id) is not { } existing) return Results.NotFound();
             if (existing.Source == ConnectionSource.Environment) return EnvironmentIsReadOnly();
             if (Validate(body) is { } error) return error;
+            if (Unreachable(hosts, body) is { } refused) return refused;
 
             // A connection this browser owns is edited where it lives: in memory, under its key.
             if (existing.Source == ConnectionSource.Session)
@@ -319,12 +321,13 @@ public static class ConnectionEndpoints
         });
 
         api.MapPost("/test", async (ConnectionRequest body, DriverRegistry drivers,
-            TunnelManager tunnels, StudioAccess access, CancellationToken ct) =>
+            TunnelManager tunnels, StudioAccess access, ConnectHosts hosts, CancellationToken ct) =>
         {
             // The cheapest door of them all: it opens whatever the body says and keeps nothing, so
             // it belongs behind the same switch as the form rather than beside it.
             if (!access.MayAdd) return AddingIsClosed();
             if (Validate(body) is { } error) return error;
+            if (Unreachable(hosts, body) is { } refused) return refused;
 
             TunnelSpec? opened = null;
             (string Host, int Port) target = default;
@@ -421,6 +424,13 @@ public static class ConnectionEndpoints
 
         return null;
     }
+
+    /// A target outside WDS_CONNECT_HOSTS, refused at the door: a studio that would open it is a
+    /// way into whatever network it runs in.
+    private static IResult? Unreachable(ConnectHosts hosts, ConnectionRequest body) =>
+        hosts.Refuse(body.Engine, body.ConnectionString) is { } refusal
+            ? Results.Json(new { message = refusal }, statusCode: StatusCodes.Status403Forbidden)
+            : null;
 
     /// A studio where the deployment owns the connections. The setting is named because the
     /// person reading this is often the person who can change it.

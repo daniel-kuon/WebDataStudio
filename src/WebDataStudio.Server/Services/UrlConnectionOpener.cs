@@ -17,6 +17,7 @@ public sealed class UrlConnectionOpener(
     FileRoots roots,
     SessionConnections sessions,
     ConnectionStore store,
+    ConnectHosts hosts,
     IHttpClientFactory clients)
 {
     /// The named client, so a deployment can put a proxy or a certificate in front of it.
@@ -111,6 +112,9 @@ public sealed class UrlConnectionOpener(
         if (engine is null)
             return Refused(entry, "this connection string does not say which engine it is for; name "
                                   + "it as the label, for example postgres:Host=…");
+
+        // The same list every other way in is checked against: a link is not a way around it.
+        if (hosts.Refuse(engine, entry.Value) is { } unreachable) return Refused(entry, unreachable);
 
         return Keep(entry, sessionKey, engine, entry.Value, !options.Writable,
             entry.Label ?? engine.ToUpperInvariant());

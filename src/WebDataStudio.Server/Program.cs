@@ -150,6 +150,7 @@ builder.Services.AddSingleton<SessionConnections>();
 // Ends the sessions nobody came back to, and deletes what they brought with them.
 builder.Services.AddHostedService<SessionSweeper>();
 builder.Services.AddSingleton(sp => StudioAccess.From(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton(sp => ConnectHosts.From(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton(sp => UrlConnectionOptions.From(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton<UrlConnectionOpener>();
 builder.Services.AddSingleton<ConnectionRegistry>();
