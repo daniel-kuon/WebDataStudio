@@ -28,7 +28,7 @@ public static class AuthEndpoints
 
         var oidc = app.Services.GetRequiredService<OidcOptions>();
 
-        api.MapGet("/auth/me", (HttpContext ctx, CurrentUser current) => Results.Ok(new
+        api.MapGet("/auth/me", (HttpContext ctx, CurrentUser current, StudioAccess access) => Results.Ok(new
         {
             anonymous = users.Anonymous,
             authenticated = users.Anonymous || (ctx.User.Identity?.IsAuthenticated ?? false),
@@ -42,6 +42,15 @@ public static class AuthEndpoints
             // Whether there is a provider to offer, and what its button says. A studio with a
             // provider and no local accounts shows only that button.
             sso = new { enabled = oidc.Enabled, label = oidc.Label, only = oidc.Enabled && users.All.Count == 0 },
+            // What this deployment lets people do. The browser cannot read environment variables,
+            // so a button it should not offer has to be hidden by this answer.
+            access = new
+            {
+                scope = access.Scope.ToString(),
+                mayAdd = access.MayAdd,
+                mayUpload = access.MayUpload,
+                mayBrowse = access.MayBrowse,
+            },
         })).AllowAnonymous();
 
         // A top-level navigation rather than a fetch: the provider answers with its own page, and a

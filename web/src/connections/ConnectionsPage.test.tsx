@@ -18,7 +18,22 @@ globalThis.ResizeObserver ??= class {
 
 const listConnections = vi.fn();
 
+/// What the studio allows. Permissive unless a test says otherwise, which is also the default the
+/// server answers with.
+const access = {
+  scope: "Stored" as "Stored" | "Session",
+  mayAdd: true,
+  mayUpload: true,
+  mayBrowse: true,
+};
+
+const me = vi.fn(async () => ({
+  anonymous: true, authenticated: true, username: null, access,
+}));
+
 vi.mock("../api", () => ({
+  me: () => me(),
+  forgetSession: vi.fn(),
   listConnections: () => listConnections(),
   createConnection: vi.fn(),
   deleteConnection: vi.fn(),
@@ -30,6 +45,7 @@ vi.mock("../api", () => ({
 }));
 
 const { ConnectionsPage } = await import("./ConnectionsPage");
+const { forgetAccess } = await import("./useAccess");
 
 const draw = (search: string) => render(
   <MantineProvider>
@@ -80,5 +96,57 @@ describe("ConnectionsPage", () => {
     await waitFor(() => expect(screen.getByText("LAKE")).toBeTruthy());
     expect(screen.queryByLabelText("Connection string")).toBeNull();
     expect(screen.queryByText(/anything else speaking S3/)).toBeNull();
+  });
+
+  /// What this deployment allows decides what the page offers: a button for a closed door would
+  /// only answer with a refusal.
+  describe("what the deployment allows", () => {
+    beforeEach(() => {
+      forgetAccess();
+      access.scope = "Stored";
+      access.mayAdd = true;
+    });
+
+    it("offers no Add button where connections do not come from users", async () => {
+      access.mayAdd = false;
+      draw("");
+
+      await waitFor(() => expect(screen.getByText("LAKE")).toBeTruthy());
+      expect(screen.queryByRole("button", { name: /add connection/i })).toBeNull();
+      expect(screen.queryByRole("button", { name: /add a bucket/i })).toBeNull();
+    });
+
+    it("offers it where they do", async () => {
+      draw("");
+
+      await waitFor(() => expect(screen.getByRole("button", { name: /add connection/i })).toBeTruthy());
+    });
+
+    it("offers a way out where connections belong to this browser", async () => {
+      access.scope = "Session";
+      draw("");
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /forget my connections/i })).toBeTruthy());
+    });
+
+    it("offers no way out where they are everybody's", async () => {
+      draw("");
+
+      await waitFor(() => expect(screen.getByText("LAKE")).toBeTruthy());
+      expect(screen.queryByRole("button", { name: /forget my connections/i })).toBeNull();
+    });
+
+    /// The empty state is the whole instruction a visitor gets on a studio like that.
+    it("says what to bring when there is nothing yet", async () => {
+      access.scope = "Session";
+      listConnections.mockResolvedValue([]);
+      draw("");
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /bring a database/i })).toBeTruthy());
+      expect(screen.getByText(/belongs to this browser/i)).toBeTruthy();
+      expect(screen.getByText(/from your own machine/i)).toBeTruthy();
+    });
   });
 });

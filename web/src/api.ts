@@ -14,7 +14,19 @@ export interface Me {
   /// The identity provider, where one is configured. `only` means there are no local accounts, so
   /// the login screen has nothing else to offer.
   sso?: { enabled: boolean; label: string; only: boolean };
+  /// Absent only on a studio older than the setting; the hook fills in the permissive default.
+  access?: StudioAccess;
 }
+/// What this deployment lets people do: where a connection they make goes, and which ways in are
+/// open. The browser cannot read environment variables, so a hidden button has to be hidden by the
+/// server's own answer.
+export interface StudioAccess {
+  scope: "Stored" | "Session";
+  mayAdd: boolean;
+  mayUpload: boolean;
+  mayBrowse: boolean;
+}
+
 export interface Connection {
   id: string; name: string; engine: string; readOnly: boolean;
   color: string | null; group: string | null;
@@ -83,6 +95,12 @@ export interface HealthDto {
 export const health = (): Promise<HealthDto> => fetch(`${base}/health`).then(r => ok<HealthDto>(r));
 
 // Login must not trigger the unauthorized handler: a wrong password is an expected answer here.
+/// Everything this browser brought, gone now: connections, files and the cookie that named them.
+export const forgetSession = (): Promise<void> =>
+  fetch(`${base}/connections/forget`, { method: "POST" }).then(r => {
+    if (!r.ok) throw new Error("the studio could not forget this session");
+  });
+
 export const login = (username: string, password: string): Promise<Me> =>
   fetch(`${base}/auth/login`, json("POST", { username, password })).then(async r => {
     if (!r.ok) return fail(r);

@@ -4,6 +4,7 @@ import {
 } from "@mantine/core";
 import { IconArrowUp, IconDatabase, IconFile, IconFolder, IconServer } from "@tabler/icons-react";
 import { browseFiles, uploadConnectionFile, type BrowseDto, type Connection } from "../api";
+import { useAccess } from "./useAccess";
 
 /// Two ways to name a database file: the one on your machine, and the one the server can see.
 ///
@@ -21,6 +22,7 @@ export interface FilePickerProps {
 }
 
 export function FilePicker({ onUploaded, onPicked }: FilePickerProps) {
+  const access = useAccess();
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [browsing, setBrowsing] = useState(false);
@@ -57,17 +59,25 @@ export function FilePicker({ onUploaded, onPicked }: FilePickerProps) {
     await go();
   };
 
+  // Both halves are their own switch, so a deployment can take uploads and keep its own folders to
+  // itself — or the other way round.
+  if (!access.mayUpload && !access.mayBrowse) return null;
+
   return (
     <Stack gap="xs">
       <Group align="end" gap="xs" wrap="nowrap">
-        <FileInput label="Database file" placeholder="SQLite, DuckDB, Parquet, CSV, NDJSON"
-          aria-label="Database file" disabled={busy} style={{ flex: 1 }}
-          leftSection={busy ? <Loader size={14} /> : <IconDatabase size={16} />}
-          onChange={file => void upload(file)} />
+        {access.mayUpload && (
+          <FileInput label="Database file" placeholder="SQLite, DuckDB, Parquet, CSV, NDJSON"
+            aria-label="Database file" disabled={busy} style={{ flex: 1 }}
+            leftSection={busy ? <Loader size={14} /> : <IconDatabase size={16} />}
+            onChange={file => void upload(file)} />
+        )}
 
-        <Button variant="default" leftSection={<IconServer size={16} />} onClick={() => void open()}>
-          Browse the server
-        </Button>
+        {access.mayBrowse && (
+          <Button variant="default" leftSection={<IconServer size={16} />} onClick={() => void open()}>
+            Browse the server
+          </Button>
+        )}
       </Group>
 
       {problem && <Alert color="red" variant="light">{problem}</Alert>}

@@ -5,6 +5,11 @@ import { MantineProvider } from "@mantine/core";
 import { FilePicker } from "./FilePicker";
 
 vi.mock("../api", () => ({
+  // The picker asks what this deployment allows before it offers either way in.
+  me: vi.fn(async () => ({
+    anonymous: true, authenticated: true, username: null,
+    access: { scope: "Stored", mayAdd: true, mayUpload: true, mayBrowse: true },
+  })),
   uploadConnectionFile: vi.fn(async (file: File) => ({
     id: "abc", name: file.name, engine: "sqlite", readOnly: false,
   })),
