@@ -18,8 +18,16 @@ public static class ConnectionFileEndpoints
     public static void MapConnectionFileEndpoints(this WebApplication app)
     {
         app.MapPost("/api/connections/file", async (HttpRequest request, FileRoots roots,
-            ConnectionStore store, CancellationToken ct) =>
+            ConnectionStore store, StudioAccess access, CancellationToken ct) =>
         {
+            // Before the body is read: a closed door should not first take a database off somebody.
+            if (!access.MayUpload)
+                return Results.Json(new
+                {
+                    message = "this studio does not take uploaded database files; a deployment "
+                              + "allows it with WDS_ALLOW_FILE_UPLOAD",
+                }, statusCode: StatusCodes.Status403Forbidden);
+
             if (!request.HasFormContentType)
                 return Results.BadRequest(new { message = "send the file as multipart/form-data" });
 
@@ -106,8 +114,16 @@ public static class ConnectionFileEndpoints
             }
         }).DisableAntiforgery();
 
-        app.MapGet("/api/connections/browse", (string? path, FileRoots roots) =>
+        app.MapGet("/api/connections/browse", (string? path, FileRoots roots, StudioAccess access) =>
         {
+            // Closed for the listing and for a path somebody guessed: it is the same door.
+            if (!access.MayBrowse)
+                return Results.Json(new
+                {
+                    message = "this studio does not let its users browse the server's folders; a "
+                              + "deployment allows it with WDS_ALLOW_FILE_BROWSE",
+                }, statusCode: StatusCodes.Status403Forbidden);
+
             // No path yet: the roots are where a picker starts.
             if (string.IsNullOrWhiteSpace(path))
                 return Results.Ok(new

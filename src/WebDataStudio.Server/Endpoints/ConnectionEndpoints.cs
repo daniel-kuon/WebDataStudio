@@ -36,8 +36,9 @@ public static class ConnectionEndpoints
         api.MapGet("/", (ConnectionRegistry registry) =>
             Results.Ok(registry.All().Select(ConnectionRegistry.ToDto)));
 
-        api.MapPost("/", (ConnectionRequest body, ConnectionStore store) =>
+        api.MapPost("/", (ConnectionRequest body, ConnectionStore store, StudioAccess access) =>
         {
+            if (!access.MayAdd) return AddingIsClosed();
             if (Validate(body) is { } error) return error;
             try
             {
@@ -154,8 +155,11 @@ public static class ConnectionEndpoints
         api.MapGet("/export", (ConnectionRegistry registry) =>
             Results.Ok(registry.All().Select(ToPortable)));
 
-        api.MapPost("/import", (List<PortableConnection> body, ConnectionStore store) =>
+        api.MapPost("/import", (List<PortableConnection> body, ConnectionStore store,
+            StudioAccess access) =>
         {
+            if (!access.MayAdd) return AddingIsClosed();
+
             var imported = new List<string>();
             var skipped = new List<object>();
 
@@ -246,8 +250,11 @@ public static class ConnectionEndpoints
         });
 
         api.MapPost("/test", async (ConnectionRequest body, DriverRegistry drivers,
-            TunnelManager tunnels, CancellationToken ct) =>
+            TunnelManager tunnels, StudioAccess access, CancellationToken ct) =>
         {
+            // The cheapest door of them all: it opens whatever the body says and keeps nothing, so
+            // it belongs behind the same switch as the form rather than beside it.
+            if (!access.MayAdd) return AddingIsClosed();
             if (Validate(body) is { } error) return error;
 
             TunnelSpec? opened = null;
@@ -345,6 +352,15 @@ public static class ConnectionEndpoints
 
         return null;
     }
+
+    /// A studio where the deployment owns the connections. The setting is named because the
+    /// person reading this is often the person who can change it.
+    private static IResult AddingIsClosed() =>
+        Results.Json(new
+        {
+            message = "this studio does not take connections from its users; a deployment allows it "
+                      + "with WDS_ALLOW_ADD_CONNECTION",
+        }, statusCode: StatusCodes.Status403Forbidden);
 
     private static IResult EnvironmentIsReadOnly() =>
         Results.Json(new { message = "connections defined in the environment are read-only" },
