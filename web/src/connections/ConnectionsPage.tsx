@@ -96,6 +96,7 @@ export function ConnectionsPage() {
       <Modal opened={adding} onClose={() => setAdding(false)} title="Add connection">
         <ConnectionForm
           onCancel={() => setAdding(false)}
+          onCreated={() => { setAdding(false); refresh(); }}
           onSubmit={async value => {
             try { await createConnection(value); setAdding(false); refresh(); }
             catch (e) { setError(e instanceof Error ? e.message : String(e)); }

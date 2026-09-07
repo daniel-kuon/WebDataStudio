@@ -15,7 +15,10 @@ export interface Me {
 }
 export interface Connection {
   id: string; name: string; engine: string; readOnly: boolean;
-  color: string | null; group: string | null; source: "Environment" | "Stored"; summary: string;
+  color: string | null; group: string | null;
+  /// "Session" is a connection opened from the studio's own URL: it belongs to this browser
+  /// and ends with the session.
+  source: "Environment" | "Stored" | "Session"; summary: string;
   tunnelled: boolean;
   /// This connection is one a person signs in to rather than one the machine can open on its own.
   interactive?: boolean;
@@ -235,6 +238,30 @@ export interface ChangePreviewDto {
   hash: string; script: string; statementCount: number; destructive: boolean;
 }
 export interface LookupItemDto { value: unknown; label: unknown }
+
+/// A database file from the browser, kept by the studio and answered as a connection.
+export const uploadConnectionFile = (file: File, name?: string): Promise<Connection> => {
+  const body = new FormData();
+  body.append("file", file);
+  if (name) body.append("name", name);
+
+  return fetch(`${base}/connections/file`, { method: "POST", body }).then(r => ok<Connection>(r));
+};
+
+export interface BrowseDto {
+  /// Null when nothing has been opened yet: the roots are where a picker starts.
+  path: string | null;
+  roots: string[];
+  parent: string | null;
+  directories: { name: string; path: string }[];
+  /// `engine` is null for a file no driver here reads — listed anyway, so nobody wonders where it went.
+  files: { name: string; path: string; size: number; engine: string | null }[];
+}
+
+/// What the server can see, inside the folders it is allowed to read.
+export const browseFiles = (path?: string): Promise<BrowseDto> =>
+  fetch(`${base}/connections/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`)
+    .then(r => ok<BrowseDto>(r));
 
 export const browseData = (conn: string, ref: string,
   params: { offset?: number; limit?: number; sort?: string; desc?: boolean;
