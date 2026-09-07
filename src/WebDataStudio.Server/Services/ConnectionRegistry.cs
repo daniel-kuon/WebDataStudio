@@ -21,11 +21,14 @@ public sealed class ConnectionRegistry
     private readonly bool _forceReadOnly;
     // Absent in the few places that construct a registry outside the container.
     private readonly CurrentUser? _current;
+    private readonly SessionConnections? _sessions;
 
-    public ConnectionRegistry(IConfiguration config, ConnectionStore store, CurrentUser? current = null)
+    public ConnectionRegistry(IConfiguration config, ConnectionStore store,
+        CurrentUser? current = null, SessionConnections? sessions = null)
     {
         _store = store;
         _current = current;
+        _sessions = sessions;
         _environment = EnvironmentConnections.Parse(
             config.AsEnumerable().ToDictionary(kv => kv.Key, kv => kv.Value));
         _forceReadOnly = string.Equals(config["WDS_READONLY"], "true", StringComparison.OrdinalIgnoreCase);
@@ -38,7 +41,9 @@ public sealed class ConnectionRegistry
     {
         var user = _current?.User;
 
-        return _environment.Concat(_store.List())
+        // Three sources: what the deployment wrote down, what somebody stored, and what this
+        // browser opened from a link. The last one is nobody else's.
+        return _environment.Concat(_store.List()).Concat(_sessions?.Current ?? [])
             .Where(c => user is null || user.MaySee(c.Id, c.Name))
             .Select(c => _forceReadOnly || user?.ReadOnly == true ? c with { ReadOnly = true } : c)
             .ToList();

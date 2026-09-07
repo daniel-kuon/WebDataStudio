@@ -138,6 +138,7 @@ builder.Services.AddSingleton(sp => new ConnectionStore(
     sp.GetRequiredService<IConfiguration>()["DB_PATH"] ?? defaultDbPath,
     sp.GetRequiredService<SecretProtector>()));
 builder.Services.AddSingleton<FileRoots>();
+builder.Services.AddSingleton<SessionConnections>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<MaskPolicyStore>();
 builder.Services.AddSingleton<UndoStore>();
@@ -376,6 +377,15 @@ app.UseStaticFiles();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Every request carries a key for the connections one browser opened from a link. Before the audit
+// trail and the guard, because both of them may already answer — and a connection that belongs to
+// this browser has to exist while they do.
+app.Use(async (ctx, next) =>
+{
+    ctx.RequestServices.GetRequiredService<SessionConnections>().Remember(SessionConnections.Key(ctx));
+    await next();
+});
 
 // Before the guard rather than after it: a refused request is a line worth having, and by here it is
 // already known who was refused.

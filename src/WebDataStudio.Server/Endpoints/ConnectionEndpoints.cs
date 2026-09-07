@@ -57,6 +57,7 @@ public static class ConnectionEndpoints
         {
             if (registry.Find(id) is not { } existing) return Results.NotFound();
             if (existing.Source == ConnectionSource.Environment) return EnvironmentIsReadOnly();
+            if (existing.Source == ConnectionSource.Session) return OpenedFromALink();
             if (Validate(body) is { } error) return error;
 
             store.Update(existing with
@@ -82,6 +83,7 @@ public static class ConnectionEndpoints
         {
             if (registry.Find(id) is not { } existing) return Results.NotFound();
             if (existing.Source == ConnectionSource.Environment) return EnvironmentIsReadOnly();
+            if (existing.Source == ConnectionSource.Session) return OpenedFromALink();
 
             store.Delete(id);
             await pool.EvictAsync(id);
@@ -347,6 +349,15 @@ public static class ConnectionEndpoints
     private static IResult EnvironmentIsReadOnly() =>
         Results.Json(new { message = "connections defined in the environment are read-only" },
             statusCode: StatusCodes.Status403Forbidden);
+
+    /// Nothing about it is stored, so there is nothing to edit or delete. Said rather than answered
+    /// with a 404 about a connection that is plainly in the list.
+    private static IResult OpenedFromALink() =>
+        Results.BadRequest(new
+        {
+            message = "this connection was opened from a link; it is not stored, and it ends with "
+                      + "the session",
+        });
 
     private static IResult? Validate(ConnectionRequest body)
     {
