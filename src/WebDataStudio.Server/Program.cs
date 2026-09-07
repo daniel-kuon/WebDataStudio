@@ -139,6 +139,8 @@ builder.Services.AddSingleton(sp => new ConnectionStore(
     sp.GetRequiredService<SecretProtector>()));
 builder.Services.AddSingleton<FileRoots>();
 builder.Services.AddSingleton<SessionConnections>();
+builder.Services.AddSingleton(sp => UrlConnectionOptions.From(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<UrlConnectionOpener>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<MaskPolicyStore>();
 builder.Services.AddSingleton<UndoStore>();
@@ -211,6 +213,11 @@ if (telemetryOptions.Configured)
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthAlerts>());
 builder.Services.AddHttpClient("alerts", client => client.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddHttpClient("assist", client => client.Timeout = TimeSpan.FromSeconds(60));
+// Fetching a database over http: long enough for a real file, and no redirects — a redirect is a
+// second host, and WDS_OPEN_FROM_URL_HOSTS is a list of hosts.
+builder.Services.AddHttpClient(UrlConnectionOpener.HttpClientName,
+        client => client.Timeout = TimeSpan.FromMinutes(10))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<DriverRegistry>();
 builder.Services.AddSingleton<TunnelManager>();
 builder.Services.AddSingleton(sp => new SessionPool(sp.GetRequiredService<IConfiguration>()));
@@ -429,6 +436,7 @@ app.Use(async (ctx, next) =>
 app.MapAuthEndpoints();
 app.MapConnectionEndpoints();
 app.MapConnectionFileEndpoints();
+app.MapUrlConnectionEndpoints();
 app.MapSchemaEndpoints();
 app.MapQueryEndpoints();
 app.MapWorkspaceEndpoints();

@@ -73,7 +73,10 @@ public static class FileConnections
     /// the driver would give a stack trace.
     public static bool LooksLikeSqlite(string path)
     {
-        using var stream = File.OpenRead(path);
+        // Shared for reading *and* writing: a database somebody has open is still a database, and
+        // Windows refuses a read-only share next to a handle that may write — which includes this
+        // studio's own pooled connection to a file it already opened once.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         var head = new byte[SqliteHeader.Length];
 
         return stream.ReadAtLeast(head, head.Length, throwOnEndOfStream: false) == head.Length
