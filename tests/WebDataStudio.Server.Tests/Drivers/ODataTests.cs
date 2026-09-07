@@ -58,6 +58,11 @@ public sealed class FakeODataHandler : HttpMessageHandler
                 { "value": [ { "Id": 3, "Name": "grace", "Active": false } ] }
                 """, "application/json"),
             "/svc/People/$count" => (HttpStatusCode.OK, "3", "text/plain"),
+            var p when p.StartsWith("/svc/People/$count?") => (HttpStatusCode.OK, "2", "text/plain"),
+            var p when p.StartsWith("/svc/People?$top=") => (HttpStatusCode.OK, """
+                { "value": [ { "Id": 2, "Name": "linus", "Active": true, "Extra": { "a": 1 } },
+                             { "Id": 1, "Name": "ada", "Active": true } ] }
+                """, "application/json"),
             "/svc/People(1)" => (HttpStatusCode.OK,
                 """{ "@odata.context": "$metadata#People/$entity", "@odata.etag": "W/\"1\"", "Id": 1, "Name": "ada", "Active": true }""",
                 "application/json"),
@@ -103,8 +108,51 @@ public class ODataDriverTests
     {
         var (driver, _) = Make();
         Assert.False(driver.Caps.Sql);
-        Assert.False(driver.Caps.TabularBrowse);
+        Assert.True(driver.Caps.TabularBrowse);
         Assert.True(driver.Dialect.IsReadOnlyStatement("People?$top=1"));
+    }
+
+    [Fact]
+    public async Task Pages_through_the_service_with_query_options()
+    {
+        var (driver, handler) = Make();
+        await using var session = await driver.OpenAsync(Spec(), Ct);
+
+        var page = await driver.PageAsync(session, new SchemaNodeRef(SchemaNodeKind.Table, ["People"]),
+            new PageQuery(10, 2, "Name", true, "Name", "^a"), Ct);
+
+        var request = handler.Requests.Single(r => r.RequestUri!.PathAndQuery.StartsWith("/svc/People?"));
+        var query = Uri.UnescapeDataString(request.RequestUri!.Query);
+        Assert.Contains("$top=2", query);
+        Assert.Contains("$skip=10", query);
+        Assert.Contains("$orderby=Name desc", query);
+        Assert.Contains("$filter=startswith(Name,'a')", query);
+
+        Assert.NotNull(page);
+        Assert.Equal(["Id", "Name", "Active"], page!.Columns.Select(c => c.Name).ToArray());
+        Assert.Equal([2L, "linus", true], page.Rows[0]);
+        Assert.Equal(2, page.Total);
+        Assert.False(page.Editable);
+    }
+
+    [Theory]
+    [InlineData("Edm.String", "ada", "contains(Name,'ada')")]
+    [InlineData("Edm.String", "$a", "endswith(Name,'a')")]
+    [InlineData("Edm.String", "~o'b", "not contains(Name,'o''b')")]
+    [InlineData("Edm.String", "=a,=b", "Name eq 'a' or Name eq 'b'")]
+    [InlineData("Edm.Int32", "3", "Name eq 3")]
+    [InlineData("Edm.Int32", ">=3", "Name ge 3")]
+    [InlineData("Edm.Int32", "!=3", "Name ne 3")]
+    [InlineData("Edm.Int32", "NULL", "Name eq null")]
+    public void Translates_the_grid_filter_language(string type, string expression, string expected) =>
+        Assert.Equal(expected, ODataFilter.Build(new ODataProperty("Name", type, true, false), expression).Filter);
+
+    [Fact]
+    public void A_compound_filter_is_noted_rather_than_guessed()
+    {
+        var (filter, note) = ODataFilter.Build(new ODataProperty("Name", "Edm.String", true, false), "a,b");
+        Assert.Null(filter);
+        Assert.NotNull(note);
     }
 
     [Fact]

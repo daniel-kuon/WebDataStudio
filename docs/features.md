@@ -116,7 +116,7 @@ Status is one of `done`, `partial: <what is missing>` or `not-supported: <engine
 | F14.2 | Redis: key tree, type-specific editors, TTL, command console | done | redis | Redis panel, query tab |
 | F14.3 | Result renderer as a JSON tree, switchable to a table for flat documents | done | mongodb, odata | Result area, document view |
 | F14.7 | Look at a file rather than download it: spreadsheets, documents and archives through an on-demand viewer | done | storage, all | Bucket preview, explorer menu, cell viewer |
-| F14.4 | OData: entity sets from `$metadata`, queries as resource paths with query options, paged results | partial: read-only; no POST, PATCH or DELETE and no SQL translation | odata | Query tab on an OData connection |
+| F14.4 | OData: entity sets from `$metadata`, queries as resource paths with query options, paged results | partial: read-only; no POST, PATCH or DELETE and no SQL translation | odata | Data tab and query tab on an OData connection |
 | F15.1 | GitHub Pages site served from `/docs`, docsify like AspireUI, same visual language | done | all | docs/ site |
 | F15.2 | Every page in English and German, switchable in the sidebar; docsify i18n through a `/docs/de/` tree | done | all | docs/ site |
 | F15.3 | Content: getting started, environment variables, connections, query editor, results and export, schema editing, analysis, administration, engine capability matrix, shortcuts | done | all | docs/ site |

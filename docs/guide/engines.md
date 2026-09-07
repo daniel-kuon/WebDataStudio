@@ -7,7 +7,7 @@ of silently doing nothing.
 | Capability | PostgreSQL | MySQL | SQL Server | SQLite | Oracle | DuckDB | ClickHouse | MongoDB | Redis | Storage | OData |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | SQL | yes | yes | yes | yes | yes | yes | yes | — | — | yes | — |
-| Browse as rows | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | — |
+| Browse as rows | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | Browse a container as rows | — | — | — | — | — | — | — | — | yes | — | — |
 | Count a column's values | yes | yes | yes | yes | yes | yes | yes | — | — | yes | — |
 | Schemas | yes | — | yes | — | yes | yes | yes | — | — | — |
@@ -40,7 +40,8 @@ results that are documents render as a JSON tree with a table view for flat ones
 An OData connection is the URL of the service root, with `user:pw@` for Basic authentication or
 `bearer:<token>@` for a Bearer token. The explorer lists the entity sets from `$metadata` and the
 query tab takes a resource path with query options, such as
-`Products?$filter=UnitPrice gt 20&$orderby=ProductName&$top=50`. The driver follows the service's
+`Products?$filter=UnitPrice gt 20&$orderby=ProductName&$top=50`. The data tab pages, sorts and
+filters through the same options, so the service does the work. The driver follows the service's
 next links up to the row limit and only ever reads.
 
 They still browse. The data tab asks the driver for a page rather than building a `SELECT`, so a

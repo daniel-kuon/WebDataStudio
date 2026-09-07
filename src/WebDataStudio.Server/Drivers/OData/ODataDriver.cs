@@ -112,7 +112,7 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
 
     public DriverInfo Info { get; } = new("odata", "OData", 443, "https://host/service.svc/");
 
-    public DriverCapabilities Caps { get; } = new() { Sql = false, TabularBrowse = false };
+    public DriverCapabilities Caps { get; } = new() { Sql = false };
 
     public SqlDialect Dialect { get; } = new ODataDialect();
 
@@ -156,7 +156,7 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
     }
 
     public Task<IReadOnlyList<SchemaNode>> IntrospectAsync(IDbSession session, SchemaNodeRef? parent,
-        CancellationToken ct)
+        CancellationToken ct, bool systemObjects = false)
     {
         if (parent is not null) return Task.FromResult<IReadOnlyList<SchemaNode>>([]);
 
@@ -178,16 +178,17 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
             .Select((p, i) => new ColumnInfo(p.Name, p.Type, p.Nullable, null, p.IsKey, false, null, i + 1))
             .ToList();
 
-        return new ObjectDetail(target, columns, [], [], [], await CountAsync(odata, target.Name, ct),
+        return new ObjectDetail(target, columns, [], [], [], await CountAsync(odata, target.Name, null, ct),
             null, null, null);
     }
 
     /// Not every service implements $count; a missing count is shown as unknown, not as an error.
-    private static async Task<long?> CountAsync(ODataSession odata, string set, CancellationToken ct)
+    private static async Task<long?> CountAsync(ODataSession odata, string set, string? filter, CancellationToken ct)
     {
         try
         {
-            var text = await odata.Http.GetStringAsync(new Uri(odata.Root, $"{set}/$count"), ct);
+            var query = filter is null ? "" : $"?$filter={Uri.EscapeDataString(filter)}";
+            var text = await odata.Http.GetStringAsync(new Uri(odata.Root, $"{set}/$count{query}"), ct);
             return long.TryParse(text.Trim(), out var count) ? count : null;
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
@@ -195,6 +196,62 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
             return null;
         }
     }
+
+    /// The data tab's page, built as OData query options so the service does the paging, sorting
+    /// and filtering rather than the studio pulling the whole set.
+    public async Task<TabularPage?> PageAsync(IDbSession session, SchemaNodeRef target, PageQuery query,
+        CancellationToken ct)
+    {
+        if (target.Kind != SchemaNodeKind.Table) return null;
+
+        var odata = Cast(session);
+        if (!odata.Metadata.EntitySets.TryGetValue(target.Name, out var properties))
+            throw new KeyNotFoundException($"the service has no entity set '{target.Name}'");
+
+        var options = new List<string> { $"$top={query.Limit}", $"$skip={query.Offset}" };
+        string? filter = null, note = null;
+
+        var sortColumn = properties.FirstOrDefault(p => p.Name.Equals(query.Sort, StringComparison.OrdinalIgnoreCase));
+        if (sortColumn is not null) options.Add($"$orderby={sortColumn.Name}{(query.Desc ? " desc" : "")}");
+
+        var filterColumn = properties.FirstOrDefault(p => p.Name.Equals(query.FilterColumn, StringComparison.OrdinalIgnoreCase));
+        if (filterColumn is not null && query.Filter is { Length: > 0 })
+        {
+            (filter, note) = ODataFilter.Build(filterColumn, query.Filter);
+            if (filter is not null) options.Add($"$filter={filter}");
+        }
+
+        var url = new Uri(odata.Root, $"{target.Name}?{string.Join('&', options.Select(EscapeOption))}");
+        var (items, _, error) = await FetchAsync(odata, url, ct);
+        if (error is not null) throw new InvalidOperationException(error.Text);
+
+        var columns = properties.Select(p => new ColumnMeta(p.Name, p.Type, p.Nullable)).ToList();
+        var rows = items.Select(item => properties.Select(p =>
+            item.ValueKind == JsonValueKind.Object && item.TryGetProperty(p.Name, out var value)
+                ? Value(value)
+                : null).ToArray()).ToList();
+
+        return new TabularPage(columns, rows, await CountAsync(odata, target.Name, filter, ct),
+            Editable: false, Reason: "an OData connection only reads", Note: note);
+
+        // Only the value half of an option is escaped: the name and the `=` stay, the space and the
+        // quotes inside the value are what the service needs encoded.
+        static string EscapeOption(string option)
+        {
+            var split = option.Split('=', 2);
+            return $"{split[0]}={Uri.EscapeDataString(split[1])}";
+        }
+    }
+
+    private static object? Value(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Null or JsonValueKind.Undefined => null,
+        JsonValueKind.String => element.GetString(),
+        JsonValueKind.True => true,
+        JsonValueKind.False => false,
+        JsonValueKind.Number => element.TryGetInt64(out var whole) ? (object)whole : element.GetDouble(),
+        _ => element.GetRawText(),
+    };
 
     public async IAsyncEnumerable<ResultChunk> ExecuteAsync(IDbSession session, ScriptRequest request,
         [EnumeratorCancellation] CancellationToken ct)
@@ -381,4 +438,48 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
         // Unwrap: a pooled or tunnelled session is a wrapper around the one this driver opened.
         session.Unwrap() as ODataSession
         ?? throw new InvalidOperationException("this session does not belong to the OData driver");
+}
+
+/// The grid's column filter language, said in OData. One term only: `a b` (and) and `a,b` (or)
+/// are noted rather than half-translated.
+public static class ODataFilter
+{
+    public static (string? Filter, string? Note) Build(ODataProperty column, string expression)
+    {
+        var text = expression.Trim();
+        if (text.Length == 0) return (null, null);
+
+        var name = column.Name;
+        var isText = column.Type == "Edm.String";
+        string Literal(string raw) => isText ? "'" + raw.Replace("'", "''") + "'" : raw.Trim();
+
+        if (text.Equals("NULL", StringComparison.OrdinalIgnoreCase)) return ($"{name} eq null", null);
+        if (text.Equals("!NULL", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("NOT NULL", StringComparison.OrdinalIgnoreCase)) return ($"{name} ne null", null);
+
+        // A list of alternatives is what ticking values in the column menu writes.
+        if (text.StartsWith('=') && text.Contains(",=", StringComparison.Ordinal))
+            return (string.Join(" or ", text
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(part => $"{name} eq {Literal(part.TrimStart('='))}")), null);
+
+        if (text.Contains(',') || !isText && text.Contains(' '))
+            return (null, "an OData filter here takes one term: no AND (space) or OR (comma)");
+
+        if (text.StartsWith(">=")) return ($"{name} ge {Literal(text[2..])}", null);
+        if (text.StartsWith("<=")) return ($"{name} le {Literal(text[2..])}", null);
+        if (text.StartsWith("!=")) return ($"{name} ne {Literal(text[2..])}", null);
+        if (text.StartsWith('>')) return ($"{name} gt {Literal(text[1..])}", null);
+        if (text.StartsWith('<')) return ($"{name} lt {Literal(text[1..])}", null);
+        if (text.StartsWith('=')) return ($"{name} eq {Literal(text[1..])}", null);
+        if (text.StartsWith('~'))
+            return isText
+                ? ($"not contains({name},{Literal(text[1..])})", null)
+                : ($"{name} ne {Literal(text[1..])}", null);
+
+        if (!isText) return ($"{name} eq {Literal(text)}", null);
+        if (text.StartsWith('^')) return ($"startswith({name},{Literal(text[1..])})", null);
+        if (text.StartsWith('$')) return ($"endswith({name},{Literal(text[1..])})", null);
+        return ($"contains({name},{Literal(text)})", null);
+    }
 }

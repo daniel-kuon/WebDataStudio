@@ -800,8 +800,6 @@ export function DockShell() {
         // shape its type has, and where it can be edited. A database or a prefix folder is a table
         // of keys, and the data tab reads it like any other — the driver builds that page itself.
         if (engine === "redis" && s.node.kind === "Table") openRedisKey(s.connectionId, s.node.ref);
-        // An OData entity set is queried by URL, so it opens as a query rather than a grid.
-        else if (engine === "odata") newTab(s.connectionId, `${s.node.label}?$top=100`);
         else await openData(s.connectionId, s.node.ref, s.node.label);
         break;
 
@@ -815,7 +813,8 @@ export function DockShell() {
           break;
         }
 
-        newTab(s.connectionId, `SELECT * FROM ${name}`);
+        // An OData entity set is queried by URL, not by SELECT.
+        newTab(s.connectionId, engine === "odata" ? `${s.node.label}?$top=100` : `SELECT * FROM ${name}`);
         break;
 
       case "import-object":
