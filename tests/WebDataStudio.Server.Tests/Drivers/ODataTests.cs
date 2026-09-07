@@ -274,6 +274,18 @@ public class ODataDriverTests
     }
 
     [Fact]
+    public async Task Lines_after_the_url_are_sent_as_headers()
+    {
+        var (driver, handler) = Make();
+        await using var _ = await driver.OpenAsync(
+            Spec("https://example.test/svc/\nCookie: session=abc; other=1\nX-Api-Key: k1"), Ct);
+
+        var request = handler.Requests[0];
+        Assert.Equal("session=abc; other=1", request.Headers.GetValues("Cookie").Single());
+        Assert.Equal("k1", request.Headers.GetValues("X-Api-Key").Single());
+    }
+
+    [Fact]
     public async Task A_bearer_user_sends_the_token_as_a_bearer_header()
     {
         var (driver, handler) = Make();

@@ -38,7 +38,8 @@ MongoDB, Redis and OData are not SQL engines: their query tabs take the engines'
 results that are documents render as a JSON tree with a table view for flat ones.
 
 An OData connection is the URL of the service root, with `user:pw@` for Basic authentication or
-`bearer:<token>@` for a Bearer token. The explorer lists the entity sets from `$metadata` and the
+`bearer:<token>@` for a Bearer token. A service that wants a session cookie or an API key gets it
+as a further line under the URL, `Cookie: name=value` or `X-Api-Key: value`. The explorer lists the entity sets from `$metadata` and the
 query tab takes a resource path with query options, such as
 `Products?$filter=UnitPrice gt 20&$orderby=ProductName&$top=50`. The data tab pages, sorts and
 filters through the same options, so the service does the work. The driver follows the service's

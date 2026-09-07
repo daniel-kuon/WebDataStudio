@@ -105,7 +105,9 @@ public sealed class ODataSession(ConnectionSpec spec, HttpClient http, Uri root,
 }
 
 /// Reads an OData service (V2 to V4) over HTTP. The connection string is the service root URL;
-/// `user:pw@` in it is sent as Basic authentication, `bearer:<token>@` as a Bearer token.
+/// `user:pw@` in it is sent as Basic authentication, `bearer:<token>@` as a Bearer token. Any
+/// further line is a request header, `Name: value` — the way to hand over a session cookie or an
+/// API key a service wants under its own name.
 public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
 {
     private const int BatchSize = 200;
@@ -118,7 +120,9 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
 
     public async Task<IDbSession> OpenAsync(ConnectionSpec spec, CancellationToken ct)
     {
-        var url = new Uri(spec.ConnectionString, UriKind.Absolute);
+        var lines = spec.ConnectionString.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
+        if (lines.Length == 0) throw new FormatException("an OData connection string is the http(s) URL of the service root");
+        var url = new Uri(lines[0], UriKind.Absolute);
         if (url.Scheme is not ("http" or "https"))
             throw new FormatException("an OData connection string is the http(s) URL of the service root");
 
@@ -130,6 +134,12 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
         var http = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
         http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
         http.DefaultRequestHeaders.Authorization = Authorization(url.UserInfo);
+        foreach (var line in lines.Skip(1))
+        {
+            var split = line.Split(':', 2);
+            if (split.Length != 2) throw new FormatException($"'{line}' is not a header; write it as Name: value");
+            http.DefaultRequestHeaders.TryAddWithoutValidation(split[0].Trim(), split[1].Trim());
+        }
 
         try
         {
