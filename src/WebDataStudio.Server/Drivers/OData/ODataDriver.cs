@@ -133,7 +133,12 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
 
         try
         {
-            var csdl = await http.GetStringAsync(new Uri(root.Uri, "$metadata"), ct);
+            // $metadata is XML; a service that honours Accept strictly answers 406 to "json".
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(root.Uri, "$metadata"));
+            request.Headers.Accept.ParseAdd("application/xml");
+            using var response = await http.SendAsync(request, ct);
+            response.EnsureSuccessStatusCode();
+            var csdl = await response.Content.ReadAsStringAsync(ct);
             return new ODataSession(spec, http, root.Uri, ODataMetadata.Parse(csdl));
         }
         catch (Exception)
