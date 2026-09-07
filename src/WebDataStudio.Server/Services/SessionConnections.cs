@@ -15,7 +15,7 @@ namespace WebDataStudio.Server.Services;
 /// A studio that is open for weeks also needs its sessions to end, so each key carries when it was
 /// last seen and `Sweep` drops the quiet ones along with the files they brought.
 public sealed class SessionConnections(
-    IHttpContextAccessor accessor, StudioAccess access, FileRoots roots,
+    IHttpContextAccessor accessor, StudioAccess access, FileRoots roots, SessionPool pool,
     ILogger<SessionConnections>? log = null)
 {
     public const string CookieName = "wds_session";
@@ -114,9 +114,14 @@ public sealed class SessionConnections(
 
     /// Everything this browser brought, gone now: the connections and the files behind them. What
     /// the **Forget my connections** button does.
-    public void Forget(string key)
+    ///
+    /// The pool comes first and is waited for. A session it still holds has the database file open,
+    /// and on Windows an open file cannot be deleted — the folder was left behind empty.
+    public async Task ForgetAsync(string key)
     {
-        _byKey.TryRemove(key, out _);
+        if (_byKey.TryRemove(key, out var held))
+            foreach (var spec in held.Connections.Values) await pool.EvictAsync(spec.Id);
+
         DeleteFiles(key);
     }
 
@@ -136,7 +141,7 @@ public sealed class SessionConnections(
     ///
     /// No lifetime means nothing is swept: a studio one person runs on their own machine should not
     /// lose a connection because they went to lunch.
-    public int Sweep(DateTimeOffset now)
+    public async Task<int> SweepAsync(DateTimeOffset now)
     {
         if (access.SessionTtl is not { } ttl) return 0;
 
@@ -146,8 +151,7 @@ public sealed class SessionConnections(
         {
             if (now - session.Seen < ttl) continue;
 
-            _byKey.TryRemove(key, out _);
-            DeleteFiles(key);
+            await ForgetAsync(key);
             gone++;
         }
 
@@ -176,15 +180,30 @@ public sealed class SessionConnections(
     private void DeleteFiles(string key)
     {
         var folder = Path.Combine(roots.Uploads, "session", FolderFor(key));
+        if (!Directory.Exists(folder)) return;
 
         try
         {
-            if (Directory.Exists(folder)) Directory.Delete(folder, true);
+            Directory.Delete(folder, true);
         }
-        catch (IOException e)
+        catch (IOException)
         {
-            // A file the studio cannot remove is worth a line, not a crash in a background sweep.
-            log?.LogWarning(e, "could not remove the files of a session that ended");
+            // Microsoft.Data.Sqlite pools its own connections, so returning ours to the studio's
+            // pool is not the same as closing the file: the handle survives, and on Windows an open
+            // file cannot be deleted. Clearing the driver's pools is what actually lets go. Every
+            // other session simply reopens its file on the next query, which for a local file costs
+            // nothing worth measuring.
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+            try
+            {
+                Directory.Delete(folder, true);
+            }
+            catch (IOException e)
+            {
+                // A file the studio cannot remove is worth a line, not a crash in a background sweep.
+                log?.LogWarning(e, "could not remove the files of a session that ended");
+            }
         }
     }
 
@@ -206,7 +225,7 @@ public sealed class SessionSweeper(SessionConnections sessions, StudioAccess acc
         try
         {
             while (await clock.WaitForNextTickAsync(stoppingToken))
-                sessions.Sweep(DateTimeOffset.UtcNow);
+                await sessions.SweepAsync(DateTimeOffset.UtcNow);
         }
         catch (OperationCanceledException)
         {

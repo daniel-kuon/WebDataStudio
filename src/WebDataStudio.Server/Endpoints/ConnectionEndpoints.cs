@@ -203,13 +203,11 @@ public static class ConnectionEndpoints
         // Everything this browser brought, gone now: the connections, the files behind them and
         // the cookie that named them. A studio anybody walks up to should have a way out that does
         // not involve trusting a lifetime.
-        api.MapPost("/forget", (HttpContext ctx, SessionConnections sessions, SessionPool pool) =>
+        api.MapPost("/forget", async (HttpContext ctx, SessionConnections sessions) =>
         {
             var key = SessionConnections.Key(ctx);
 
-            foreach (var spec in sessions.For(key)) _ = pool.EvictAsync(spec.Id);
-
-            sessions.Forget(key);
+            await sessions.ForgetAsync(key);
             ctx.Response.Cookies.Delete(SessionConnections.CookieName, SessionConnections.Cookie(ctx));
 
             return Results.NoContent();

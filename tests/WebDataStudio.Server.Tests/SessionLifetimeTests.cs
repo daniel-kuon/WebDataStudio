@@ -46,7 +46,7 @@ public class SessionLifetimeTests : IDisposable
     // --- the lifetime ----------------------------------------------------------------------------
 
     [Fact]
-    public void A_session_that_has_gone_quiet_for_longer_than_the_lifetime_is_swept()
+    public async Task A_session_that_has_gone_quiet_for_longer_than_the_lifetime_is_swept()
     {
         using var factory = Factory(("WDS_SESSION_TTL_MINUTES", "30"));
         _ = factory.CreateClient();
@@ -60,7 +60,7 @@ public class SessionLifetimeTests : IDisposable
         sessions.Remember("busy", now.AddMinutes(-1));
         sessions.Add("busy", Spec("s2", "RECENT"));
 
-        var swept = sessions.Sweep(now);
+        var swept = await sessions.SweepAsync(now);
 
         Assert.Equal(1, swept);
         Assert.Empty(sessions.For("quiet"));
@@ -68,7 +68,7 @@ public class SessionLifetimeTests : IDisposable
     }
 
     [Fact]
-    public void Without_a_lifetime_nothing_is_swept()
+    public async Task Without_a_lifetime_nothing_is_swept()
     {
         using var factory = Factory(("WDS_SESSION_TTL_MINUTES", "0"));
         _ = factory.CreateClient();
@@ -78,7 +78,7 @@ public class SessionLifetimeTests : IDisposable
         sessions.Remember("ancient", DateTimeOffset.UtcNow.AddDays(-40));
         sessions.Add("ancient", Spec("s1", "OLD"));
 
-        Assert.Equal(0, sessions.Sweep(DateTimeOffset.UtcNow));
+        Assert.Equal(0, await sessions.SweepAsync(DateTimeOffset.UtcNow));
         Assert.Single(sessions.For("ancient"));
     }
 
@@ -100,7 +100,7 @@ public class SessionLifetimeTests : IDisposable
         sessions.Remember(key, DateTimeOffset.UtcNow.AddHours(-2));
         await client.GetAsync("/api/connections", Ct);
 
-        Assert.Equal(0, sessions.Sweep(DateTimeOffset.UtcNow));
+        Assert.Equal(0, await sessions.SweepAsync(DateTimeOffset.UtcNow));
         Assert.Single(sessions.For(key));
     }
 
@@ -123,7 +123,7 @@ public class SessionLifetimeTests : IDisposable
         Assert.True(Directory.Exists(folder));
 
         sessions.Remember(key, DateTimeOffset.UtcNow.AddHours(-2));
-        sessions.Sweep(DateTimeOffset.UtcNow);
+        await sessions.SweepAsync(DateTimeOffset.UtcNow);
 
         Assert.False(Directory.Exists(folder));
     }
@@ -197,6 +197,35 @@ public class SessionLifetimeTests : IDisposable
         using var body = new MultipartFormDataContent();
         body.Add(new ByteArrayContent(RealSqlite()), "file", "shop.sqlite3");
         (await client.PostAsync("/api/connections/file", body, Ct)).EnsureSuccessStatusCode();
+
+        var sessions = factory.Services.GetRequiredService<SessionConnections>();
+        var folder = Path.Combine(_dir, "data", "files", "session",
+            SessionConnections.FolderFor(sessions.Keys.Single()));
+
+        (await client.PostAsync("/api/connections/forget", null, Ct)).EnsureSuccessStatusCode();
+
+        Assert.False(Directory.Exists(folder));
+    }
+
+    /// The case a hand test found: once the studio has read the database, its pooled session holds
+    /// the file, and on Windows an open file cannot be deleted. The folder stayed behind empty.
+    [Fact]
+    public async Task Forgetting_a_database_the_studio_has_read_takes_the_folder_too()
+    {
+        using var factory = Factory();
+        using var client = factory.CreateClient();
+
+        using var body = new MultipartFormDataContent();
+        body.Add(new ByteArrayContent(RealSqlite()), "file", "shop.sqlite3");
+
+        var made = await client.PostAsync("/api/connections/file", body, Ct);
+        made.EnsureSuccessStatusCode();
+
+        using var answer = JsonDocument.Parse(await made.Content.ReadAsStringAsync(Ct));
+        var id = answer.RootElement.GetProperty("id").GetString()!;
+
+        // Reading the schema is what puts a session in the pool with the file open.
+        await client.GetStringAsync($"/api/schema/{id}", Ct);
 
         var sessions = factory.Services.GetRequiredService<SessionConnections>();
         var folder = Path.Combine(_dir, "data", "files", "session",
