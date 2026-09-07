@@ -1,9 +1,16 @@
 <p align="center">
   <img src="web/public/brand/logo.svg" alt="WebDataStudio" height="90">
 </p>
+<p align="center">
+  <a href="https://quickrun.org/run?repo=fgilde/WebDataStudio"><img src="https://quickrun.org/badge.svg" alt="Run" height="90"></a>
+</p>
 
 <p align="center">
   A database studio that runs in your browser. One container, nine engines, no install.
+</p>
+
+<p>
+  <img src="https://fgilde.github.io/WebDataStudio/assets/screenshots/chart-dark.png"/>
 </p>
 
 <p align="center">
@@ -13,7 +20,6 @@
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
-[![QuickRun](https://quickrun.org/badge.svg)](https://quickrun.org/run?repo=fgilde/WebDataStudio)
 
 ---
 
@@ -40,7 +46,8 @@ the app opens straight into the studio.
 
 Those packages set `WDS_USER` and `WDS_PASSWORD`, so the studio they install has a login screen.
 
-### In .NET Aspire
+ <h2><img src="https://aspire.dev/_astro/aspire-logo-32.DGHSFRgf.svg" width="20"> In .NET Aspire </h2>
+
 
 ```csharp
 var db = builder.AddPostgres("db").AddDatabase("shop");
@@ -54,8 +61,11 @@ builder.AddContainer("studio", "ghcr.io/fgilde/webdatastudio")
 Every connection string you can express as an environment variable is attached at startup, so a
 studio for your development stack is one resource in the app host.
 
-Or with [Nextended.Aspire.Hosting.WebDataStudio](https://www.nuget.org/packages/Nextended.Aspire.Hosting.WebDataStudio/),
+<span>
+ <img src="https://raw.githubusercontent.com/fgilde/Nextended/main/icon.png" width="20"> 
+ Or with <a href="https://www.nuget.org/packages/Nextended.Aspire.Hosting.WebDataStudio/" target="_blank">Nextended.Aspire.Hosting.WebDataStudio</a>,
 which wires the databases of your stack into the studio for you:
+</span>
 
 ```csharp
 builder.AddPostgres("pg").AddDatabase("shop").WithWebDataStudio();
