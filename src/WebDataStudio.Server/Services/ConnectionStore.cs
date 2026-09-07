@@ -78,7 +78,13 @@ public sealed class ConnectionStore
     {
         if (!Available) throw Unavailable();
 
-        var stored = spec with { Id = Guid.NewGuid().ToString("n"), Source = ConnectionSource.Stored };
+        // An id the caller already used for something keeps: an uploaded database lies in a folder
+        // named after its connection, and a second id here would orphan the file.
+        var stored = spec with
+        {
+            Id = spec.Id is { Length: > 0 } given ? given : Guid.NewGuid().ToString("n"),
+            Source = ConnectionSource.Stored,
+        };
         lock (_gate)
         {
             using var db = Open();

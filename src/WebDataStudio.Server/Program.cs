@@ -137,6 +137,7 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton(sp => new ConnectionStore(
     sp.GetRequiredService<IConfiguration>()["DB_PATH"] ?? defaultDbPath,
     sp.GetRequiredService<SecretProtector>()));
+builder.Services.AddSingleton<FileRoots>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<MaskPolicyStore>();
 builder.Services.AddSingleton<UndoStore>();
@@ -417,6 +418,7 @@ app.Use(async (ctx, next) =>
 
 app.MapAuthEndpoints();
 app.MapConnectionEndpoints();
+app.MapConnectionFileEndpoints();
 app.MapSchemaEndpoints();
 app.MapQueryEndpoints();
 app.MapWorkspaceEndpoints();

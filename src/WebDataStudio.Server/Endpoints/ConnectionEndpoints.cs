@@ -78,13 +78,19 @@ public static class ConnectionEndpoints
         });
 
         api.MapDelete("/{id}", async (string id, ConnectionRegistry registry, ConnectionStore store,
-            SessionPool pool) =>
+            SessionPool pool, FileRoots roots) =>
         {
             if (registry.Find(id) is not { } existing) return Results.NotFound();
             if (existing.Source == ConnectionSource.Environment) return EnvironmentIsReadOnly();
 
             store.Delete(id);
             await pool.EvictAsync(id);
+
+            // An uploaded database belongs to its connection: it goes with it rather than staying
+            // behind as a file nobody can name any more.
+            var uploaded = ConnectionFileEndpoints.UploadDirectoryFor(roots, id);
+            if (Directory.Exists(uploaded)) Directory.Delete(uploaded, true);
+
             return Results.NoContent();
         });
 
