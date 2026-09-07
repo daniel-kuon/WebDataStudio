@@ -64,6 +64,13 @@ public sealed class UrlConnectionOpener(
 
         if (FileConnections.Refusal(resolved) is { } refusal) return Refused(entry, refusal);
 
+        // A file a visitor uploaded is not something a link may name. The folder names are GUIDs
+        // and not guessable, but a path that leaked would otherwise open somebody else's database.
+        // What this opener fetches itself lives under `<uploads>/url/`, outside that tree.
+        if (sessions.IsSomebodysUpload(resolved))
+            return Refused(entry, $"'{Path.GetFileName(resolved)}' belongs to somebody else's "
+                                  + "session; a link cannot name a file another visitor brought");
+
         var kind = FileConnections.KindOf(resolved);
 
         if (kind == FileConnectionKind.Unsupported)

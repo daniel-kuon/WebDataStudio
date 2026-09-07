@@ -48,8 +48,17 @@ public static class ConnectionEndpoints
             // A studio anybody brings their own data to keeps what they make for their browser
             // alone: nothing on disk, nobody else's list.
             if (access.Scope == ConnectionScope.Session)
-                return Results.Ok(ConnectionRegistry.ToDto(
-                    sessions.Add(SessionConnections.Key(ctx), draft)));
+            {
+                try
+                {
+                    return Results.Ok(ConnectionRegistry.ToDto(
+                        sessions.Add(SessionConnections.Key(ctx), draft)));
+                }
+                catch (InvalidOperationException e)
+                {
+                    return Results.Conflict(new { message = e.Message });
+                }
+            }
 
             try
             {
@@ -188,6 +197,21 @@ public static class ConnectionEndpoints
 
         api.MapGet("/export", (ConnectionRegistry registry) =>
             Results.Ok(registry.All().Select(ToPortable)));
+
+        // Everything this browser brought, gone now: the connections, the files behind them and
+        // the cookie that named them. A studio anybody walks up to should have a way out that does
+        // not involve trusting a lifetime.
+        api.MapPost("/forget", (HttpContext ctx, SessionConnections sessions, SessionPool pool) =>
+        {
+            var key = SessionConnections.Key(ctx);
+
+            foreach (var spec in sessions.For(key)) _ = pool.EvictAsync(spec.Id);
+
+            sessions.Forget(key);
+            ctx.Response.Cookies.Delete(SessionConnections.CookieName, SessionConnections.Cookie(ctx));
+
+            return Results.NoContent();
+        });
 
         api.MapPost("/import", (List<PortableConnection> body, HttpContext ctx,
             ConnectionStore store, SessionConnections sessions, StudioAccess access) =>
