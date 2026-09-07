@@ -45,6 +45,10 @@ public class DriftMigrationTests : IAsyncLifetime
                 ["DB_PATH"] = Path.Combine(_dir, "wds.db"),
                 ["WDS_CONN_SHOP"] = "sqlite:///" + _db.Replace(Path.DirectorySeparatorChar, '/'),
                 ["WDS_SCHEMA_SNAPSHOT_DIR"] = Path.Combine(_dir, "snapshots"),
+                // These tests say when a snapshot is taken. The sweep that runs by itself a quarter
+                // of a minute after start would otherwise decide it under load, which is what made
+                // "no earlier snapshot" fail on a busy Linux box.
+                ["WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS"] = "3600",
             })));
 
     private static async Task<string> IdAsync(HttpClient client)

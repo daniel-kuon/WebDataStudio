@@ -51,7 +51,12 @@ public class SchemaSnapshotTests : IAsyncLifetime
                     ["WDS_CONN_SHOP"] = "sqlite:///" + _db.Replace(Path.DirectorySeparatorChar, '/'),
                 };
 
-                if (configured) settings["WDS_SCHEMA_SNAPSHOT_DIR"] = Snapshots;
+                if (configured)
+                {
+                    settings["WDS_SCHEMA_SNAPSHOT_DIR"] = Snapshots;
+                    // The sweep is asked for here, never awaited by accident.
+                    settings["WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS"] = "3600";
+                }
                 c.AddInMemoryCollection(settings);
             }));
 

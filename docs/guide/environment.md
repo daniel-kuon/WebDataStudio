@@ -33,6 +33,7 @@
 | `WDS_BACKUP_DIR` | where those dumps go. `/data/backups` by default — mount a volume there |
 | `WDS_FILE_VIEWER_URL` | where the rich file viewer is fetched from when somebody looks at a file in a bucket. Defaults to the public CDN; empty switches it off |
 | `WDS_SCHEMA_SNAPSHOT_DIR` | snapshot every connection's schema on start and report the drift — see [Schema editing](schema.md) |
+| `WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS` | how long the first sweep waits after start, 15 by default. `0` takes it right away |
 | `WDS_ARCHIVE_DIR`, `WDS_ARCHIVE_MAX_ROWS` | where kept results are written, and how many rows one keeps — see [Results and export](results.md) |
 | `WDS_ALERT_WEBHOOK`, `WDS_ALERT_INTERVAL_MINUTES`, `WDS_ALERT_MIN_SEVERITY`, `WDS_ALERT_CONNECTIONS` | post new health findings to a webhook — see [Administration](administration.md) |
 | `WDS_PUBLIC_URL` | where this studio can be reached from outside, so an alert can link back to what it is about |

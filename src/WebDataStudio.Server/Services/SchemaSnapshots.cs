@@ -30,15 +30,22 @@ public sealed record SchemaDrift(
 
 /// Where snapshots are kept, if anywhere. Off without a directory: writing files somewhere nobody
 /// asked for is not a thing a studio should do on its own.
-public sealed record SnapshotOptions(bool Configured, string Directory)
+public sealed record SnapshotOptions(bool Configured, string Directory, TimeSpan StartupDelay)
 {
     public static SnapshotOptions FromConfiguration(IConfiguration config)
     {
         var directory = config["WDS_SCHEMA_SNAPSHOT_DIR"]?.Trim();
 
+        // A number rather than a constant so a deployment can take the first snapshot right away,
+        // and so a test can say when the sweep happens instead of racing it.
+        var delay = int.TryParse(config["WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS"], out var seconds)
+                    && seconds >= 0
+            ? seconds
+            : 15;
+
         return string.IsNullOrEmpty(directory)
-            ? new SnapshotOptions(false, "")
-            : new SnapshotOptions(true, directory);
+            ? new SnapshotOptions(false, "", TimeSpan.Zero)
+            : new SnapshotOptions(true, directory, TimeSpan.FromSeconds(delay));
     }
 }
 
@@ -60,6 +67,9 @@ public sealed class SchemaSnapshots(
     private readonly Dictionary<string, SchemaDrift> _drift = [];
 
     public bool Configured => options.Configured;
+
+    /// How long after start the first sweep waits.
+    public TimeSpan StartupDelay => options.StartupDelay;
 
     public SchemaDrift? DriftOf(string connectionId) =>
         _drift.TryGetValue(connectionId, out var drift) ? drift : null;
@@ -234,7 +244,7 @@ public sealed class SchemaSnapshotStartup(SchemaSnapshots snapshots) : Backgroun
 
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+            await Task.Delay(snapshots.StartupDelay, stoppingToken);
             await snapshots.SweepAsync(stoppingToken);
         }
         catch (OperationCanceledException)

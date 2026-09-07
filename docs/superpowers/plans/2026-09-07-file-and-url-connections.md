@@ -40,7 +40,7 @@
   - `FileConnections.LooksLikeSqlite(string path) → bool`
   - `FileConnections.Refusal(string path) → string?` — the sentence for `.mdf`, `.accdb`, `.mdb`, else null
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using WebDataStudio.Server.Services;
@@ -116,12 +116,12 @@ public class FileConnectionsTests
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileConnectionsTests/*"`
 Expected: compile error — `FileConnections` does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```csharp
 using WebDataStudio.Server.Drivers.Storage;
@@ -190,12 +190,12 @@ public static class FileConnections
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileConnectionsTests/*"`
 Expected: PASS, 5 tests plus the theory's cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Services/FileConnections.cs tests/WebDataStudio.Server.Tests/FileConnectionsTests.cs
@@ -217,7 +217,7 @@ git commit -m "feat(connections): what kind of database a file is"
   - `FileRoots.Resolve(string path) → string?` — the absolute path when it is inside a root, else null
   - `FileRoots.Uploads → string` — `<DB_PATH>/files`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using Microsoft.Extensions.Configuration;
@@ -297,12 +297,12 @@ public class FileRootsTests : IDisposable
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileRootsTests/*"`
 Expected: compile error — `FileRoots` does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```csharp
 namespace WebDataStudio.Server.Services;
@@ -355,12 +355,12 @@ public sealed class FileRoots
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileRootsTests/*"`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Services/FileRoots.cs tests/WebDataStudio.Server.Tests/FileRootsTests.cs
@@ -383,7 +383,7 @@ git commit -m "feat(connections): the folders a file connection may name"
   - `POST /api/connections/file` — multipart, field `file`, optional `name`; answers `ConnectionDto`
   - `ConnectionFileEndpoints.UploadDirectoryFor(FileRoots roots, string connectionId) → string`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using System.Net;
@@ -512,12 +512,12 @@ public class FileConnectionEndpointTests : IDisposable
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileConnectionEndpointTests/*"`
 Expected: FAIL — 404 on `/api/connections/file`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `ConnectionFileEndpoints.cs`:
 
@@ -603,12 +603,12 @@ builder.Services.AddSingleton<FileRoots>();
 app.MapConnectionFileEndpoints();
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileConnectionEndpointTests/*"`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Endpoints/ConnectionFileEndpoints.cs src/WebDataStudio.Server/Endpoints/ConnectionEndpoints.cs src/WebDataStudio.Server/Program.cs tests/WebDataStudio.Server.Tests/FileConnectionEndpointTests.cs
@@ -626,7 +626,7 @@ git commit -m "feat(connections): upload a database file and open it"
 **Interfaces:**
 - Produces: `GET /api/connections/browse?path=…` → `{ path, roots: string[], parent: string?, directories: [{name, path}], files: [{name, path, size, engine}] }`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using System.Net;
@@ -731,12 +731,12 @@ public class FileBrowseEndpointTests : IDisposable
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileBrowseEndpointTests/*"`
 Expected: FAIL — 404 on `/api/connections/browse`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 Inside `MapConnectionFileEndpoints`:
 
@@ -781,12 +781,12 @@ Inside `MapConnectionFileEndpoints`:
         });
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FileBrowseEndpointTests/*"`
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Endpoints/ConnectionFileEndpoints.cs tests/WebDataStudio.Server.Tests/FileBrowseEndpointTests.cs
@@ -808,7 +808,7 @@ git commit -m "feat(connections): pick a database file the server can see"
   - `api.ts`: `uploadConnectionFile(file: File, name?: string): Promise<ConnectionDto>`, `browseFiles(path?: string): Promise<BrowseDto>` with `interface BrowseDto { path: string | null; roots: string[]; parent: string | null; directories: {name: string; path: string}[]; files: {name: string; path: string; size: number; engine: string | null}[] }`
   - `FilePicker` component: props `{ onUploaded: (created: ConnectionDto) => void; onPicked: (path: string, engine: string | null) => void }`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```tsx
 // @vitest-environment jsdom
@@ -866,12 +866,12 @@ describe("the file picker", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd web && npx vitest run src/connections/FilePicker.test.tsx`
 Expected: FAIL — cannot resolve `./FilePicker`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `api.ts`:
 
@@ -908,12 +908,12 @@ or unconditionally in the dialog's header — the picked path fills `connectionS
 `Data Source=<path>` and sets the engine the server reported; an upload closes the dialog through
 `onUploaded`, because the connection already exists at that point.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd web && npx vitest run src/connections/FilePicker.test.tsx && npx tsc -b && npx vitest run`
 Expected: PASS — the two picker tests, then the whole suite green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/connections/FilePicker.tsx web/src/connections/FilePicker.test.tsx web/src/connections/ConnectionForm.tsx web/src/api.ts
@@ -934,7 +934,7 @@ git commit -m "feat(connections): a file dialog and a server browser in the form
   - `UrlConnectionOptions.From(IConfiguration) → UrlConnectionOptions`
   - properties: `bool Enabled`, `bool Allows(UrlEntryKind)`, `IReadOnlyList<string> Hosts`, `bool HostAllowed(string host)`, `bool KeepInStore`, `bool Writable`, `long MaxBytes`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using Microsoft.Extensions.Configuration;
@@ -1014,12 +1014,12 @@ public class UrlConnectionOptionsTests
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlConnectionOptionsTests/*"`
 Expected: compile error — `UrlConnectionOptions` does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```csharp
 namespace WebDataStudio.Server.Services;
@@ -1092,12 +1092,12 @@ public sealed class UrlConnectionOptions
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlConnectionOptionsTests/*"`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Services/UrlConnectionOptions.cs tests/WebDataStudio.Server.Tests/UrlConnectionOptionsTests.cs
@@ -1118,7 +1118,7 @@ git commit -m "feat(connections): the switch in front of connections from the UR
   - `UrlEntry.Parse(string entry) → UrlEntry?` (null for an empty entry)
   - `UrlEntry.ParseAll(string parameter) → IReadOnlyList<UrlEntry>`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using WebDataStudio.Server.Services;
@@ -1205,12 +1205,12 @@ public class UrlEntryTests
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlEntryTests/*"`
 Expected: compile error — `UrlEntry` does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```csharp
 namespace WebDataStudio.Server.Services;
@@ -1266,12 +1266,12 @@ public sealed record UrlEntry(UrlEntryKind Kind, string Value, string? Label)
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlEntryTests/*"`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Services/UrlEntry.cs tests/WebDataStudio.Server.Tests/UrlEntryTests.cs
@@ -1295,7 +1295,7 @@ git commit -m "feat(connections): read what ?u= carries"
   - `SessionConnections.Current → IReadOnlyList<ConnectionSpec>` — for the request in flight
   - `ConnectionRegistry.All()` includes `SessionConnections.Current`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using System.Net;
@@ -1426,12 +1426,12 @@ public class SessionConnectionsTests : IDisposable
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/SessionConnectionsTests/*"`
 Expected: compile error — `SessionConnections` does not exist, `ConnectionSource.Session` does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `Connection.cs`: `public enum ConnectionSource { Environment, Stored, Session }`
 
@@ -1513,12 +1513,12 @@ from `_environment.Concat(_store.List()).Concat(sessions?.Current ?? [])`.
 `Program.cs`: register `SessionConnections` as a singleton, and one middleware line before the
 endpoints so every request has a key: `app.Use(async (ctx, next) => { SessionConnections.Key(ctx); await next(); });`
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/SessionConnectionsTests/*"`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Services/SessionConnections.cs src/WebDataStudio.Server/Services/ConnectionRegistry.cs src/WebDataStudio.Server/Models/Connection.cs src/WebDataStudio.Server/Endpoints/ConnectionEndpoints.cs src/WebDataStudio.Server/Program.cs tests/WebDataStudio.Server.Tests/SessionConnectionsTests.cs
@@ -1541,7 +1541,7 @@ git commit -m "feat(connections): a connection that belongs to one browser"
   - `UrlConnectionOpener.OpenAsync(IReadOnlyList<UrlEntry> entries, string sessionKey, CancellationToken ct) → IReadOnlyList<OpenedConnection>`
   - `POST /api/connections/from-url` with body `{ "u": "…" }` → `{ opened: OpenedConnection[] }`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using System.Net.Http.Json;
@@ -1729,12 +1729,12 @@ public class UrlConnectionEndpointTests : IDisposable
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlConnectionEndpointTests/*"`
 Expected: FAIL — 404 on `/api/connections/from-url`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 `UrlConnectionOpener.cs`: for each entry — check `options.Allows(kind)` (refusal naming
 `WDS_OPEN_FROM_URL`), then per kind:
@@ -1770,12 +1770,12 @@ app.MapPost("/api/connections/from-url", async (FromUrlRequest body, HttpContext
 });
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlConnectionEndpointTests/*"`
 Expected: PASS, 9 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Services/UrlConnectionOpener.cs src/WebDataStudio.Server/Endpoints/UrlConnectionEndpoints.cs src/WebDataStudio.Server/Program.cs tests/WebDataStudio.Server.Tests/UrlConnectionEndpointTests.cs
@@ -1794,7 +1794,7 @@ git commit -m "feat(connections): open what the URL named"
 - Consumes: `IHttpClientFactory` named client `"url-connections"`
 - Produces: nothing new; the `Download` branch of `OpenAsync` behaves as tested here
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The test serves the file from a second in-process host, so the fetch is a real one over a socket:
 
@@ -1930,12 +1930,12 @@ public class UrlDownloadTests : IAsyncLifetime
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlDownloadTests/*"`
 Expected: FAIL — the download branch refuses everything or throws.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `UrlConnectionOpener`, the `Download` branch:
 
@@ -1990,12 +1990,12 @@ a server that declares no length cannot fill the disk either. The named client g
 `HttpClient.Timeout = TimeSpan.FromMinutes(10)` and `AllowAutoRedirect = false` — a redirect is a
 second host, and this list is about hosts.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/UrlDownloadTests/*"`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/WebDataStudio.Server/Services/UrlConnectionOpener.cs src/WebDataStudio.Server/Program.cs tests/WebDataStudio.Server.Tests/UrlDownloadTests.cs
@@ -2017,7 +2017,7 @@ git commit -m "feat(connections): fetch a database a link points at"
   - `api.ts`: `openFromUrl(u: string): Promise<{ opened: { id: string | null; label: string; refused: string | null }[] }>`
   - `openFromUrl.ts`: `parameterFrom(search: string): string | null`, `announce(opened): string[]` — the lines to show
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -2042,12 +2042,12 @@ describe("what the studio does with its own URL", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd web && npx vitest run src/connections/openFromUrl.test.ts`
 Expected: FAIL — cannot resolve `./openFromUrl`.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```ts
 /// The studio's own URL as a way to open connections, where the deployment allows it.
@@ -2074,12 +2074,12 @@ returns something, `await openFromUrl(value)`, then refresh the connection list,
 `source` is `Session` get a badge reading `from a link` in the explorer, next to the existing
 environment badge.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cd web && npx vitest run src/connections/openFromUrl.test.ts && npx tsc -b && npx vitest run`
 Expected: PASS — two tests, then the whole suite.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/connections/openFromUrl.ts web/src/connections/openFromUrl.test.ts web/src/api.ts web/src/shell/DockShell.tsx web/src/explorer/ExplorerTree.tsx
@@ -2093,7 +2093,7 @@ git commit -m "feat(connections): the studio opens what its own URL names"
 **Files:**
 - Modify: `docs/guide/connections.md`, `docs/guide/de/connections.md`, `docs/guide/environment.md`, `docs/guide/de/environment.md`, `docs/guide/deploy.md`, `docs/features.md`, `docs/superpowers/specs/2026-08-18-webdatastudio-design.md`, `CHANGELOG.md`
 
-- [ ] **Step 1: Write the docs**
+- [x] **Step 1: Write the docs**
 
 - `connections.md` + German: a section **A database file** — upload, browse, the extension table from
   the spec, the read-only note for data files, and the two refusals (`.mdf`, Access) with their
@@ -2108,12 +2108,12 @@ git commit -m "feat(connections): the studio opens what its own URL names"
 - `CHANGELOG.md`: an `## Unreleased` section above `## 1.3.0` with both features under **Reading
   data** and the switches named.
 
-- [ ] **Step 2: Check the links and the coverage test**
+- [x] **Step 2: Check the links and the coverage test**
 
 Run: `node scripts/check-links.mjs docs && cd tests/WebDataStudio.Server.Tests && dotnet run -- -filter "/*/*/FeatureCoverageTests/*"`
 Expected: "all documentation links resolve" and 5 tests passing.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs CHANGELOG.md
@@ -2135,7 +2135,7 @@ git commit -m "docs: a database file as a connection, and connections from the U
   - `enum UrlConnections { Session, Store }`
   - `WithOpenFromUrl(this IResourceBuilder<WebDataStudioResource> builder, bool files = true, bool downloads = false, bool connectionStrings = false, IEnumerable<string>? hosts = null, UrlConnections keep = UrlConnections.Session, bool writable = false, int maxMegabytes = 512)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```csharp
 using Aspire.Hosting;
@@ -2214,12 +2214,12 @@ public class OpenFromUrlTests
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cd C:\dev\privat\github\Nextended && dotnet test Tests/Nextended.Aspire.Hosting.WebDataStudio.Tests/Nextended.Aspire.Hosting.WebDataStudio.Tests.csproj --filter "FullyQualifiedName~OpenFromUrlTests"`
 Expected: compile error — `WithOpenFromUrl` does not exist.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```csharp
 /// Where a connection opened from the URL is kept.
@@ -2271,12 +2271,12 @@ public enum UrlConnections { Session, Store }
     }
 ```
 
-- [ ] **Step 4: Run test to verify it passes, and the docs generator**
+- [x] **Step 4: Run test to verify it passes, and the docs generator**
 
 Run: `cd C:\dev\privat\github\Nextended && dotnet test Tests/Nextended.Aspire.Hosting.WebDataStudio.Tests/Nextended.Aspire.Hosting.WebDataStudio.Tests.csproj --filter "FullyQualifiedName~OpenFromUrlTests" && dotnet run --project tools/ApiRef && pwsh -NoProfile -File tools/Update-PackageDocs.ps1`
 Expected: 4 tests passing, the API reference pages regenerated, no drift.
 
-- [ ] **Step 5: Commit (in the Nextended repository)**
+- [x] **Step 5: Commit (in the Nextended repository)**
 
 ```bash
 git add Nextended.Aspire.Hosting.WebDataStudio Tests/Nextended.Aspire.Hosting.WebDataStudio.Tests/OpenFromUrlTests.cs docs
