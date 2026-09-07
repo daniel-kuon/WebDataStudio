@@ -8,7 +8,9 @@ A section here is the body of that release: the release workflow reads the one t
 (`scripts/release-notes.mjs`) and the generated commit list follows it. So a new version is written
 down here *before* it is tagged — a tag with no section still publishes, with the commit list alone.
 
-## Unreleased
+## 1.4.0
+
+A database that is a file, and a link that opens one.
 
 ### Connections
 
@@ -39,6 +41,8 @@ down here *before* it is tagged — a tag with no section still publishes, with 
 - The SQLite header check shared the file for reading only, which on Windows fails next to any
   handle that may write — including the studio's own pooled connection to a file it had already
   opened once.
+- The first schema-snapshot sweep waited a hard-coded quarter of a minute after start.
+  `WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS` now says how long it waits, and `0` takes it right away.
 
 ## 1.3.0
 
