@@ -8,7 +8,7 @@ A section here is the body of that release: the release workflow reads the one t
 (`scripts/release-notes.mjs`) and the generated commit list follows it. So a new version is written
 down here *before* it is tagged — a tag with no section still publishes, with the commit list alone.
 
-## Unreleased
+## 1.5.0
 
 ### A studio anybody brings their own data to
 
@@ -45,6 +45,9 @@ nobody else's. Nothing changes for the first kind: every default is what it was.
   make one.
 - A `?u=` file entry can no longer name a path inside the uploads tree. Those folder names are GUIDs
   and not guessable, but a path that leaked would have opened another visitor's database.
+- **Forget my connections** left the folder behind when the studio had already read the database:
+  the pool eviction was not waited for, and Microsoft.Data.Sqlite pools its own connections, so
+  handing one back does not close the file.
 
 ## 1.4.0
 
