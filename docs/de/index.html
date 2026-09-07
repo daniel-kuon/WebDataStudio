@@ -26,6 +26,7 @@
 </header>
 
 <div class="wrap hero">
+  <p class="prompt"><span class="kw">SELECT</span> alles <span class="kw">FROM</span> deine_datenbanken;</p>
   <h1>Deine Datenbanken, in einem Browser-Tab</h1>
   <p class="lead">
     WebDataStudio ist ein Datenbank-Studio, das du selbst betreibst: ein Container, neun Engines,
@@ -34,12 +35,15 @@
   </p>
 
   <div class="cta">
-    <a class="btn primary" href="#download">Jetzt starten</a>
+    <!-- QuickRun starts the container for somebody who has it, and offers the download to
+         everybody else. Its own logo, our colours: the element takes both. -->
+    <quickrun-btn class="quickrun" repo="fgilde/WebDataStudio" label="Jetzt starten"></quickrun-btn>
+    <a class="btn" href="#download">Herunterladen</a>
     <a class="btn" href="../guide/#/de/">Zur Dokumentation</a>
     <a class="btn" href="https://github.com/fgilde/WebDataStudio">Quellcode auf GitHub</a>
   </div>
 
-  <pre class="run"><span class="c"># ein Container, ein Volume, fertig</span>
+  <pre class="run shell"><span class="c"># ein Container, ein Volume, fertig</span>
 docker run -d -p 8080:8080 -v wds-data:/data \
   -e WDS_CONN_LOCAL="postgres://app:pw@db:5432/shop" \
   ghcr.io/fgilde/webdatastudio</pre>
@@ -51,17 +55,17 @@ docker run -d -p 8080:8080 -v wds-data:/data \
     nicht unterstützt.</p>
 
   <div class="engine-grid">
-    <div class="engine"><img src="../assets/db/postgresql.svg" alt=""><span>PostgreSQL</span></div>
-    <div class="engine"><img src="../assets/db/mysql.svg" alt=""><span>MySQL</span></div>
-    <div class="engine"><img src="../assets/db/mariadb.svg" alt=""><span>MariaDB</span></div>
-    <div class="engine"><img src="../assets/db/sqlserver.svg" alt=""><span>SQL Server</span></div>
-    <div class="engine"><img src="../assets/db/sqlite.svg" alt=""><span>SQLite</span></div>
-    <div class="engine"><img src="../assets/db/oracle.svg" alt=""><span>Oracle</span></div>
-    <div class="engine"><img src="../assets/db/duckdb.svg" alt=""><span>DuckDB</span></div>
-    <div class="engine"><img src="../assets/db/clickhouse.svg" alt=""><span>ClickHouse</span></div>
-    <div class="engine"><img src="../assets/db/mongodb.svg" alt=""><span>MongoDB</span></div>
-    <div class="engine"><img src="../assets/db/redis.svg" alt=""><span>Redis</span></div>
-    <div class="engine"><img src="../assets/db/storage.svg" alt=""><span>S3 · Blob · GCS</span></div>
+    <div class="engine"><img src="../assets/db/postgresql.svg" alt=""><span class="engine-name">PostgreSQL<code>postgres://</code></span></div>
+    <div class="engine"><img src="../assets/db/mysql.svg" alt=""><span class="engine-name">MySQL<code>mysql://</code></span></div>
+    <div class="engine"><img src="../assets/db/mariadb.svg" alt=""><span class="engine-name">MariaDB<code>mariadb://</code></span></div>
+    <div class="engine"><img src="../assets/db/sqlserver.svg" alt=""><span class="engine-name">SQL Server<code>sqlserver://</code></span></div>
+    <div class="engine"><img src="../assets/db/sqlite.svg" alt=""><span class="engine-name">SQLite<code>sqlite:///</code></span></div>
+    <div class="engine"><img src="../assets/db/oracle.svg" alt=""><span class="engine-name">Oracle<code>oracle://</code></span></div>
+    <div class="engine"><img src="../assets/db/duckdb.svg" alt=""><span class="engine-name">DuckDB<code>duckdb://</code></span></div>
+    <div class="engine"><img src="../assets/db/clickhouse.svg" alt=""><span class="engine-name">ClickHouse<code>clickhouse://</code></span></div>
+    <div class="engine"><img src="../assets/db/mongodb.svg" alt=""><span class="engine-name">MongoDB<code>mongodb://</code></span></div>
+    <div class="engine"><img src="../assets/db/redis.svg" alt=""><span class="engine-name">Redis<code>redis://</code></span></div>
+    <div class="engine"><img src="../assets/db/storage.svg" alt=""><span class="engine-name">S3 · Blob · GCS<code>s3:// · azblob:// · gs://</code></span></div>
   </div>
 </div>
 
@@ -453,5 +457,6 @@ builder.AddContainer("studio", "ghcr.io/fgilde/webdatastudio")
 </footer>
 
 <script src="../assets/lightbox.js"></script>
+<script type="module" src="https://quickrun.org/components.js"></script>
 </body>
 </html>
