@@ -7,6 +7,89 @@ Verbindungszeichenfolge einfügen — beim Einfügen wird die Engine erkannt und
 **Test** öffnet die Verbindung einmal und meldet, was der Server gesagt hat, ohne etwas zu
 speichern.
 
+## Eine Datenbankdatei
+
+Nicht jede Datenbank ist ein Server. Eine SQLite-Datei, eine DuckDB-Datei oder ein Ordner mit
+Parquet- und CSV-Dateien ist auch eine Datenbank, und das **Add**-Formular nimmt sie auf zwei Wege:
+
+- **Upload** — Datei im Dateidialog auswählen. Das Studio legt sie unter seinem eigenen
+  Datenverzeichnis ab, in einem Ordner mit dem Namen der Verbindung, und öffnet sie von dort. Das
+  ist der Weg für die Datei auf dem Rechner vor dir, die der Container nicht sehen kann.
+- **Browse the server** — durch die Ordner gehen, die das Studio lesen darf, und eine Datei
+  auswählen, die schon da liegt. Das ist der Weg für eine gemountete Freigabe. Die Ordner sind das
+  Datenverzeichnis des Studios plus alles, was `WDS_FILE_ROOTS` nennt; außerhalb davon ist nichts
+  erreichbar.
+
+Was womit geöffnet wird:
+
+| Endung | Geöffnet als | Anmerkung |
+| --- | --- | --- |
+| `.db`, `.sqlite`, `.sqlite3`, `.db3`, `.s3db` | SQLite | Die Datei muss mit `SQLite format 3` beginnen — ein `.db` ist, was irgendwer umbenannt hat |
+| `.duckdb`, `.ddb` | DuckDB | |
+| `.parquet`, `.csv`, `.tsv`, `.ndjson`, `.jsonl`, `.json`, `.xlsx` (auch `.gz`, `.zst`) | Storage-Verbindung über den Ordner, in dem die Datei liegt | Immer nur lesend |
+
+Eine Datendatei ist keine vierte Engine: das Studio liest einen Ordner voller Dateien längst über
+DuckDB, und eine Datei ist ein Ordner mit einer Datei darin. Durch diese Verbindung kann nicht
+geschrieben werden, egal was die übrigen Einstellungen sagen.
+
+Zwei Formate werden abgelehnt, mit Begründung statt Schulterzucken:
+
+- `.mdf` und `.ldf` — eine SQL-Server-Datendatei lässt sich nicht allein öffnen. Sie braucht einen
+  laufenden SQL Server, der sie attacht; dort attachen und diesen Server als Verbindung hinzufügen.
+- `.accdb` und `.mdb` — Access braucht den ACE-Treiber, der nur unter Windows und nur als eigene
+  Installation existiert.
+
+## Ein Link, der eine Verbindung öffnet
+
+Ein Deployment kann dem Studio erlauben, Verbindungen aus seiner eigenen URL zu öffnen. Damit wird
+es zu einer Art Live-Viewer für Datenbanken: jemandem einen Link schicken, und die Datenbank ist
+offen, sobald die Seite geladen hat.
+
+```
+https://studio.example/?u=/data/shop.sqlite3
+https://studio.example/?u=sales:/data/sales.duckdb,orders:/mnt/exports/orders.parquet
+https://studio.example/?u=https://data.example/shop.sqlite3
+https://studio.example/?u=shop:postgres%3A%2F%2Freader%3Apw%40db%3A5432%2Fshop
+```
+
+Ein `?u=` enthält eine kommagetrennte Liste. Jeder Eintrag ist ein Pfad, eine `http(s)`-URL oder
+eine vollständige Verbindungszeichenfolge, optional mit `label:` davor, um die Verbindung zu
+benennen. Ein Eintrag mit eigenen Kommas oder Semikola — eine Verbindungszeichenfolge,
+`Server=host,1433` — muss prozentkodiert sein, sonst zerlegt das Komma ihn.
+
+Standardmäßig ist das **aus**. `WDS_OPEN_FROM_URL` sagt, was ein Link mitbringen darf:
+
+| Wert | Was erlaubt ist |
+| --- | --- |
+| `false` (Standard) | Nichts. `?u=` wird ignoriert, mit einer Zeile, welche Einstellung es erlauben würde |
+| `true` | Pfad und Download — nie eine Verbindungszeichenfolge |
+| `file` | Ein Pfad innerhalb der erlaubten Wurzeln |
+| `download` | Eine `http(s)`-URL, und nur von den Hosts, die `WDS_OPEN_FROM_URL_HOSTS` nennt |
+| `connection-string` | Eine vollständige Verbindungszeichenfolge, Zugangsdaten inklusive |
+| `file,download` | Mehreres, kommagetrennt |
+
+`connection-string` muss absichtlich genannt werden, und `true` lässt es bewusst weg: eine
+Verbindungszeichenfolge in einer URL ist ein Passwort in der Browser-History, in Proxy-Logs und auf
+Screenshots.
+
+Ein Download wird einmal in das Datenverzeichnis des Studios geholt und dann als Datei geöffnet. Er
+braucht `WDS_OPEN_FROM_URL_HOSTS` — ein Abrufer, der seine Adresse aus einem Link nimmt, ist ein Weg
+zu den Adressen, die nur der Server erreicht — und er stoppt bei `WDS_OPEN_FROM_URL_MAX_MB` und
+behält nichts, wenn eine Datei darüber hinausläuft. Weiterleitungen werden nicht gefolgt: eine
+Weiterleitung ist ein zweiter Host.
+
+Was ein Link öffnet, gehört dem Browser, der ihn geöffnet hat. Es ist im Baum als **from a link**
+markiert, niemand sonst sieht es, und es ist weg, wenn der Prozess neu startet — nichts davon wird
+aufgeschrieben, was genau der Sinn ist, wenn der Link ein Passwort enthielt.
+`WDS_OPEN_FROM_URL_KEEP=store` ist der andere Zweig: die Verbindung wird wie jede andere im Store
+gespeichert, übersteht Neustarts und ist für alle sichtbar. Richtig für ein Studio, das eine Person
+betreibt, falsch für ein gemeinsames.
+
+So geöffnete Verbindungen sind nur lesend, außer `WDS_OPEN_FROM_URL_WRITABLE=true`. Jeder Eintrag
+antwortet für sich: ein Link mit drei Datenbanken öffnet die zwei, die er darf, und sagt in einer
+Zeile, warum die dritte zu blieb. Der `u`-Parameter verschwindet aus der Adresszeile, sobald das
+Studio ihn übergeben hat.
+
 ## Der Objektbaum
 
 Eine Verbindung klappt in Schemas auf, dann Ordner, dann Objekte — und ein Objekt eine Ebene

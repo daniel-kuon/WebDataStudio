@@ -101,6 +101,36 @@ die Verbindung übersprungen — besser, als sie am falschen Treiber anzuhängen
 abgelehnt, bevor es die Datenbank erreicht. `color` färbt die Zeile der Verbindung im Explorer —
 die billigste Art, einen Produktionsunfall zu verhindern.
 
+## Dateien als Verbindungen
+
+```bash
+WDS_FILE_ROOTS=/mnt/share,/srv/exports
+```
+
+Die Ordner, aus denen das Studio Dateien lesen darf, zusätzlich zu seinem eigenen
+Datenverzeichnis. Sie sind das, was der Picker **Browse the server** anbietet, und die einzigen
+Pfade, die ein `?u=`-Dateieintrag nennen darf; `..` wird vor der Prüfung aufgelöst, und ein Ordner,
+dessen Name nur wie eine Wurzel beginnt, liegt nicht darin. Standardmäßig leer, damit bleibt das
+Datenverzeichnis die einzige Wurzel.
+
+## Verbindungen aus der URL des Studios
+
+`https://studio.example/?u=…` öffnet die Datenbanken, die der Link nennt — ein Live-Viewer für
+Datenbanken. Standardmäßig aus; wie ein Link aussieht, steht unter
+[Verbindungen](./connections.md#ein-link-der-eine-verbindung-öffnet).
+
+| Variable | Standard | Wirkung |
+| --- | --- | --- |
+| `WDS_OPEN_FROM_URL` | `false` | Was ein Link mitbringen darf: `false`, `true` (= `file,download`) oder eine kommagetrennte Liste aus `file`, `download`, `connection-string` |
+| `WDS_OPEN_FROM_URL_HOSTS` | leer | Die Hosts, von denen ein Download kommen darf, kommagetrennt; `*.example.com` trifft eine Subdomain-Ebene. Leer heißt kein Download, egal was der Schalter sagt |
+| `WDS_OPEN_FROM_URL_KEEP` | `session` | `session` behält die Verbindung für den Browser, der sie geöffnet hat, und schreibt nichts auf; `store` schreibt sie in den Verbindungs-Store, für alle sichtbar |
+| `WDS_OPEN_FROM_URL_WRITABLE` | `false` | Ob eine aus einem Link geöffnete Verbindung schreiben darf |
+| `WDS_OPEN_FROM_URL_MAX_MB` | `512` | Die größte Datei, die ein Download holen darf |
+
+`true` bedeutet bewusst `file,download` und nie `connection-string`: eine Verbindungszeichenfolge in
+einer URL ist ein Passwort in der Browser-History, in Proxy-Logs und auf Screenshots und muss darum
+absichtlich genannt werden.
+
 ## Anmeldung über einen Provider
 
 ```bash

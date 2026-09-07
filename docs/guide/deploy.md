@@ -79,6 +79,12 @@ public studio without credentials hands every visitor whatever the connections b
 so set them, and consider `WDS_READONLY=true`, which is enforced in the driver rather than by
 hiding buttons.
 
+`WDS_OPEN_FROM_URL` is off for the same reason. A link that carries a connection string carries a
+password — into browser history, proxy logs and screenshots — which is why `true` allows a path and
+a download but never `connection-string`; that one has to be named on purpose. A download also
+needs `WDS_OPEN_FROM_URL_HOSTS`: a studio that fetches whatever address a link names is a way for a
+visitor to reach the addresses only the server can.
+
 ## Which build is running
 
 The version sits in the bottom right corner of the window, and its tooltip carries the commit and

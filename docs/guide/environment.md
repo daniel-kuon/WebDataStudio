@@ -144,6 +144,35 @@ if the guess fails — better than attaching it to the wrong driver.
 rejected before it reaches the database. `color` tints the connection's row in the explorer, which
 is the cheapest way to stop a production accident.
 
+## Files as connections
+
+```bash
+WDS_FILE_ROOTS=/mnt/share,/srv/exports
+```
+
+The folders the studio may read files from, on top of its own data directory. They are what the
+**Browse the server** picker offers and the only paths a `?u=` file entry may name; `..` is
+resolved before the check, and a folder whose name merely starts like a root is not inside it.
+Empty by default, which leaves the data directory as the only root.
+
+## Connections from the studio's own URL
+
+`https://studio.example/?u=…` opens the databases the link names — a live viewer for databases.
+Off by default; see [Connections](./connections.md#a-link-that-opens-a-connection) for what a link
+looks like.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `WDS_OPEN_FROM_URL` | `false` | What a link may carry: `false`, `true` (= `file,download`), or a comma-separated list of `file`, `download`, `connection-string` |
+| `WDS_OPEN_FROM_URL_HOSTS` | empty | The hosts a download may come from, comma-separated; `*.example.com` matches one level of subdomain. Empty means no download, whatever the switch says |
+| `WDS_OPEN_FROM_URL_KEEP` | `session` | `session` keeps the connection for the browser that opened it and writes nothing down; `store` writes it to the connection store, visible to everybody |
+| `WDS_OPEN_FROM_URL_WRITABLE` | `false` | Whether a connection opened from a link may write |
+| `WDS_OPEN_FROM_URL_MAX_MB` | `512` | The largest file a download may fetch |
+
+`true` deliberately means `file,download` and never `connection-string`: a connection string in a
+URL is a password in browser history, in proxy logs and in screenshots, so it has to be named on
+purpose.
+
 ## Backups on a schedule
 
 `WDS_BACKUP_SCHEDULE_FILE` names a JSON file of jobs, and `WDS_BACKUP_DIR` says where the dumps go

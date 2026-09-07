@@ -6,6 +6,85 @@ Open **Connections** in the header, press **Add**, and either fill in the form o
 connection string — pasting detects the engine and fills the rest. **Test** opens the connection
 once and reports what the server said, without saving anything.
 
+## A database file
+
+Not every database is a server. A SQLite file, a DuckDB file or a folder of Parquet and CSV files is
+a database too, and the **Add** form takes them two ways:
+
+- **Upload** — pick the file in the file dialog. The studio keeps it under its own data directory,
+  in a folder named after the connection, and opens it from there. This is the way in for the file
+  on the laptop in front of you, which the container cannot see.
+- **Browse the server** — walk the folders the studio is allowed to read and pick a file that is
+  already there. This is the way in for a mounted share. The folders are the studio's own data
+  directory plus whatever `WDS_FILE_ROOTS` names; nothing outside them is reachable.
+
+What opens what:
+
+| Extension | Opened as | Notes |
+| --- | --- | --- |
+| `.db`, `.sqlite`, `.sqlite3`, `.db3`, `.s3db` | SQLite | The file has to start with `SQLite format 3` — a `.db` is whatever somebody renamed |
+| `.duckdb`, `.ddb` | DuckDB | |
+| `.parquet`, `.csv`, `.tsv`, `.ndjson`, `.jsonl`, `.json`, `.xlsx` (also `.gz`, `.zst`) | A storage connection over the folder the file lies in | Read-only, always |
+
+A data file is not a fourth engine: the studio already reads a folder of files through DuckDB, and
+one file is a folder with one file in it. That connection cannot be written through, whatever the
+rest of the settings say.
+
+Two formats are refused, with the reason rather than a shrug:
+
+- `.mdf` and `.ldf` — a SQL Server data file cannot be opened on its own. It needs a running SQL
+  Server to attach it; attach it there and add that server as a connection.
+- `.accdb` and `.mdb` — Access needs the ACE driver, which exists only on Windows and only as an
+  install of its own.
+
+## A link that opens a connection
+
+A deployment can let the studio open connections named in its own URL, which turns it into
+something like a live viewer for databases: send somebody a link, and the database is open when the
+page finishes loading.
+
+```
+https://studio.example/?u=/data/shop.sqlite3
+https://studio.example/?u=sales:/data/sales.duckdb,orders:/mnt/exports/orders.parquet
+https://studio.example/?u=https://data.example/shop.sqlite3
+https://studio.example/?u=shop:postgres%3A%2F%2Freader%3Apw%40db%3A5432%2Fshop
+```
+
+One `?u=` holds a comma-separated list. Each entry is a path, an `http(s)` URL or a whole
+connection string, optionally with `label:` in front to name the connection. An entry that carries
+commas or semicolons of its own — a connection string, `Server=host,1433` — has to be
+percent-encoded, or the comma splits it.
+
+It is **off by default**. `WDS_OPEN_FROM_URL` says what a link may carry:
+
+| Value | What is allowed |
+| --- | --- |
+| `false` (default) | Nothing. `?u=` is ignored, with one line saying which setting would allow it |
+| `true` | A path and a download — never a connection string |
+| `file` | A path inside the allowed roots |
+| `download` | An `http(s)` URL, and only from the hosts `WDS_OPEN_FROM_URL_HOSTS` names |
+| `connection-string` | A whole connection string, credentials and all |
+| `file,download` | Several of them, comma-separated |
+
+`connection-string` has to be named on purpose, and `true` deliberately leaves it out: a connection
+string in a URL is a password in browser history, in proxy logs and in screenshots.
+
+A download is fetched once into the studio's data directory and then opened as a file. It needs
+`WDS_OPEN_FROM_URL_HOSTS` — a fetcher that takes its address from a link is a way to reach the
+addresses only the server can — and it stops at `WDS_OPEN_FROM_URL_MAX_MB`, keeping nothing when a
+file runs past it. Redirects are not followed: a redirect is a second host.
+
+What a link opens belongs to the browser that opened it. It is marked **from a link** in the tree,
+nobody else sees it, and it is gone when the process restarts — nothing about it is written down,
+which is the point when the link carried a password. `WDS_OPEN_FROM_URL_KEEP=store` is the other
+branch: the connection is written to the store like any other, kept across restarts and visible to
+everybody. Right for a studio one person runs, wrong for a shared one.
+
+Connections opened this way are read-only unless `WDS_OPEN_FROM_URL_WRITABLE=true`. Each entry
+answers for itself: a link with three databases in it opens the two it may and says in one line why
+the third stayed closed. The `u` parameter is dropped from the address bar as soon as the studio has
+handed it over.
+
 ## The object tree
 
 A connection expands into schemas, then folders, then objects — and an object expands one level

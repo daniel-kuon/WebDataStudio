@@ -8,6 +8,38 @@ A section here is the body of that release: the release workflow reads the one t
 (`scripts/release-notes.mjs`) and the generated commit list follows it. So a new version is written
 down here *before* it is tagged — a tag with no section still publishes, with the commit list alone.
 
+## Unreleased
+
+### Connections
+
+- **A database file as a connection.** The **Add** form takes a SQLite or DuckDB file two ways:
+  uploaded from the browser — the way in for the file on the laptop in front of you, which the
+  container cannot see — or picked inside the folders the server may read, which `WDS_FILE_ROOTS`
+  names on top of the studio's own data directory. A Parquet, CSV, NDJSON or Excel file opens as a
+  storage connection over the folder it lies in, read-only whatever else is set. `.mdf` and Access
+  files are refused with the reason rather than a shrug.
+- **Connections the studio opens from its own URL.** `https://studio.example/?u=/data/shop.sqlite3`
+  opens the database when the page finishes loading, which makes the studio something like a live
+  viewer for databases. One `?u=` holds a comma-separated list, each entry a path, an `http(s)` URL
+  the studio fetches once, or a whole connection string, optionally labelled — and each entry
+  answers for itself, so a link with three databases in it opens the two it may and says in one
+  line why the third stayed closed.
+
+  Off by default. `WDS_OPEN_FROM_URL=true` means a path and a download and never a connection
+  string: that one has to be named on purpose, because a connection string in a URL is a password in
+  browser history, in proxy logs and in screenshots. A download needs the hosts it may fetch from in
+  `WDS_OPEN_FROM_URL_HOSTS` and stops at `WDS_OPEN_FROM_URL_MAX_MB` (512 by default). What a link
+  opens belongs to the browser that opened it — marked **from a link**, invisible to everybody else,
+  written down nowhere — unless `WDS_OPEN_FROM_URL_KEEP=store` says otherwise, and read-only unless
+  `WDS_OPEN_FROM_URL_WRITABLE=true`. The `u` parameter leaves the address bar as soon as the studio
+  has handed it over.
+
+### Fixed
+
+- The SQLite header check shared the file for reading only, which on Windows fails next to any
+  handle that may write — including the studio's own pooled connection to a file it had already
+  opened once.
+
 ## 1.3.0
 
 The image, the desktop builds and the Aspire integration all come from this tag.

@@ -64,8 +64,10 @@ function docsifyRoot(file) {
 
 async function checkAnchor(target, anchor, from, raw) {
   const text = await readFile(target, "utf8");
+  // Letters rather than \w: that one is ASCII here, so every German heading with an umlaut in it
+  // used to get a slug nobody could link to. VitePress keeps the umlaut, and so does this.
   const slugs = [...text.matchAll(/^#{1,6}\s+(.+)$/gm)]
-    .map(m => m[1].toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-"));
+    .map(m => m[1].toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").trim().replace(/\s+/g, "-"));
 
   if (!slugs.includes(anchor.toLowerCase())) problems.push(`${rel(from)} → ${raw} (no such heading)`);
 }
