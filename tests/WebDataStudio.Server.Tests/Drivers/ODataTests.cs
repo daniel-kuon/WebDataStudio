@@ -60,8 +60,9 @@ public sealed class FakeODataHandler : HttpMessageHandler
             "/svc/People/$count" => (HttpStatusCode.OK, "3", "text/plain"),
             var p when p.StartsWith("/svc/People/$count?") => (HttpStatusCode.OK, "2", "text/plain"),
             var p when p.StartsWith("/svc/People?$top=") => (HttpStatusCode.OK, """
-                { "value": [ { "Id": 2, "Name": "linus", "Active": true, "Extra": { "a": 1 } },
-                             { "Id": 1, "Name": "ada", "Active": true } ] }
+                { "value": [ { "Id": 2, "Name": "linus", "Active": true, "Extra": { "a": 1 },
+                               "Orders": [ { "Id": 7, "Total": 1.5 } ] },
+                             { "Id": 1, "Name": "ada", "Active": true, "Orders": [] } ] }
                 """, "application/json"),
             "/svc/People(1)" => (HttpStatusCode.OK,
                 """{ "@odata.context": "$metadata#People/$entity", "@odata.etag": "W/\"1\"", "Id": 1, "Name": "ada", "Active": true }""",
@@ -135,6 +136,73 @@ public class ODataDriverTests
         Assert.False(page.Editable);
     }
 
+    [Fact]
+    public async Task The_builders_options_ride_along_and_the_grid_keeps_the_paging()
+    {
+        var (driver, handler) = Make();
+        await using var session = await driver.OpenAsync(Spec(), Ct);
+
+        var page = await driver.PageAsync(session, new SchemaNodeRef(SchemaNodeKind.Table, ["People"]),
+            new PageQuery(0, 25, null, false, null, null,
+                Options: "$select=Id,Name&$expand=Orders&$filter=Active eq true&$orderby=Name&$top=5"), Ct);
+
+        var query = Uri.UnescapeDataString(
+            handler.Requests.Single(r => r.RequestUri!.PathAndQuery.StartsWith("/svc/People?")).RequestUri!.Query);
+
+        Assert.Contains("$select=Id,Name", query);
+        Assert.Contains("$expand=Orders", query);
+        Assert.Contains("$filter=Active eq true", query);
+        Assert.Contains("$orderby=Name", query);
+        // The grid pages, so its own $top stands and the builder's is left out.
+        Assert.Contains("$top=25", query);
+        Assert.DoesNotContain("$top=5", query);
+
+        // $select narrows the columns, $expand adds the relation as one of them.
+        Assert.NotNull(page);
+        Assert.Equal(["Id", "Name", "Orders"], page!.Columns.Select(c => c.Name).ToArray());
+        Assert.Contains("\"Id\": 7", page.Rows[0][2]!.ToString());
+    }
+
+    [Fact]
+    public async Task A_column_filter_and_the_builders_filter_both_hold()
+    {
+        var (driver, handler) = Make();
+        await using var session = await driver.OpenAsync(Spec(), Ct);
+
+        await driver.PageAsync(session, new SchemaNodeRef(SchemaNodeKind.Table, ["People"]),
+            new PageQuery(0, 25, null, false, "Name", "^a", Options: "$filter=Active eq true"), Ct);
+
+        var query = Uri.UnescapeDataString(
+            handler.Requests.Single(r => r.RequestUri!.PathAndQuery.StartsWith("/svc/People?")).RequestUri!.Query);
+
+        Assert.Contains("$filter=(Active eq true) and (startswith(Name,'a'))", query);
+    }
+
+    [Fact]
+    public async Task A_navigation_property_is_described_but_kept_out_of_the_plain_page()
+    {
+        var (driver, _) = Make();
+        await using var session = await driver.OpenAsync(Spec(), Ct);
+        var target = new SchemaNodeRef(SchemaNodeKind.Table, ["People"]);
+
+        var detail = await driver.DescribeAsync(session, target, Ct);
+        var orders = Assert.Single(detail.Columns, c => c.Name == "Orders");
+        Assert.Equal("Collection(Shop.Order)", orders.DataType);
+
+        var page = await driver.PageAsync(session, target, new PageQuery(0, 25, null, false, null, null), Ct);
+        Assert.DoesNotContain("Orders", page!.Columns.Select(c => c.Name));
+    }
+
+    [Fact]
+    public void Options_are_read_back_apart_encoded_or_not()
+    {
+        Assert.Equal([("$filter", "Active eq true"), ("$top", "5")],
+            ODataOptions.Parse("?$filter=Active%20eq%20true&$top=5"));
+        Assert.Empty(ODataOptions.Parse(null));
+        // Anything that is not a query option is not one: a stray segment is left out.
+        Assert.Empty(ODataOptions.Parse("People&nonsense"));
+    }
+
     [Theory]
     [InlineData("Edm.String", "ada", "contains(Name,'ada')")]
     [InlineData("Edm.String", "$a", "endswith(Name,'a')")]
@@ -175,7 +243,8 @@ public class ODataDriverTests
         await using var session = await driver.OpenAsync(Spec(), Ct);
         var detail = await driver.DescribeAsync(session, new SchemaNodeRef(SchemaNodeKind.Table, ["People"]), Ct);
 
-        Assert.Equal(["Id", "Name", "Active"], detail.Columns.Select(c => c.Name).ToArray());
+        // The relation comes last, after the entity's own properties.
+        Assert.Equal(["Id", "Name", "Active", "Orders"], detail.Columns.Select(c => c.Name).ToArray());
         Assert.Contains(detail.Columns,
             c => c is { Name: "Id", IsPrimaryKey: true, Nullable: false, DataType: "Edm.Int32" });
         Assert.Contains(detail.Columns, c => c is { Name: "Active", Nullable: true });

@@ -240,7 +240,10 @@ export const browseData = (conn: string, ref: string,
   params: { offset?: number; limit?: number; sort?: string; desc?: boolean;
             filterColumn?: string; filter?: string; reveal?: boolean;
             /// "customer_id.name": a column from the table that foreign key points at.
-            lookups?: string[] } = {}): Promise<DataPageDto> => {
+            lookups?: string[];
+            /// What an engine's own query builder put together, in that engine's language: the
+            /// OData builder's $select, $expand, $filter and $orderby. The grid still pages.
+            options?: string } = {}): Promise<DataPageDto> => {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (key === "lookups") continue;

@@ -45,6 +45,10 @@ query tab takes a resource path with query options, such as
 filters through the same options, so the service does the work. The driver follows the service's
 next links up to the row limit and only ever reads.
 
+Neither tab needs the syntax typed: the wand button opens the [query builder](query-builder.md),
+which reads the service's own `$metadata` and offers the fields, the relations, the conditions and
+the order as a form.
+
 They still browse. The data tab asks the driver for a page rather than building a `SELECT`, so a
 MongoDB collection is read with `find().sort().skip().limit()` — including the studio's filter
 language, translated into the query — and a Redis database, prefix folder or single key is read as

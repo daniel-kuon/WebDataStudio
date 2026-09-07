@@ -168,8 +168,8 @@ public static class DataEndpoints
 
         app.MapGet("/api/data/{conn}", async (string conn, [FromQuery(Name = "ref")] string objectRef,
             int? offset, int? limit, string? sort, bool? desc, string? filterColumn, string? filter,
-            bool? reveal, [FromQuery(Name = "lookup")] string[]? lookup, SessionFactory factory,
-            MaskPolicyStore policies, CancellationToken ct) =>
+            bool? reveal, [FromQuery(Name = "lookup")] string[]? lookup, string? options,
+            SessionFactory factory, MaskPolicyStore policies, CancellationToken ct) =>
         {
             try
             {
@@ -194,7 +194,7 @@ public static class DataEndpoints
                     // own contents. Asked before anything else, because none of what follows -
                     // a FROM clause, a WHERE, an ORDER BY - exists for them.
                     if (await driver.PageAsync(session, target,
-                            new PageQuery(skip, take, sort, desc == true, filterColumn, filter), ct)
+                            new PageQuery(skip, take, sort, desc == true, filterColumn, filter, options), ct)
                         is { } built)
                     {
                         var hidden = reveal == true

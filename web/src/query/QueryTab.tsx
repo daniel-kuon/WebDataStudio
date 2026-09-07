@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActionIcon, Badge, Button, Group, Select, Switch, Text, Tooltip } from "@mantine/core";
 import {
-  IconLock, IconPlayerPlay, IconPlayerStop, IconPlayerTrackNext, IconSparkles,
+  ActionIcon, Badge, Button, Collapse, Group, Paper, Select, Switch, Text, Tooltip,
+} from "@mantine/core";
+import {
+  IconLock, IconPlayerPlay, IconPlayerStop, IconPlayerTrackNext, IconSparkles, IconWand,
 } from "@tabler/icons-react";
 import { notifications } from "@mantine/notifications";
 import { AssistModal } from "../assist/AssistModal";
@@ -21,6 +23,8 @@ import { useUserSnippets } from "../editor/SnippetManager";
 import {
   beginTransaction, commitTransaction, rollbackTransaction, type OpenTransactionDto,
 } from "./transaction";
+import { ODataQueryBuilder } from "../odata/ODataQueryBuilder";
+import { parseQuery } from "../odata/query";
 import type { DialectId } from "../sql/splitStatements";
 
 export interface QueryTabState { connectionId: string; dialect: DialectId; sql: string }
@@ -46,6 +50,9 @@ export function QueryTab({ tabId, connectionId, dialect, engine = "postgresql", 
   // Remembered per tab: re-running the same query with a different id is the common case.
   const [lastValues, setLastValues] = useState<Record<string, string>>({});
   const [snippets] = useUserSnippets();
+  // The visual builder over an OData request. Open on a fresh tab, because a URL with query
+  // options is what the builder is for; the text stays the one source of truth either way.
+  const [builderOpen, setBuilderOpen] = useState(engine === "odata");
   // Off means the engine's own auto-commit; on wraps the whole script in one transaction.
   const [transactional, setTransactional] = useState(false);
   // A transaction this tab is holding open: BEGIN now, commit or roll back later, by hand.
@@ -252,6 +259,14 @@ export function QueryTab({ tabId, connectionId, dialect, engine = "postgresql", 
             <IconPlayerStop size={16} />
           </ActionIcon>
         </Tooltip>
+        {engine === "odata" && (
+          <Tooltip label="Build the request visually">
+            <ActionIcon variant={builderOpen ? "light" : "subtle"} aria-label="Query builder"
+              onClick={() => setBuilderOpen(open => !open)}>
+              <IconWand size={16} />
+            </ActionIcon>
+          </Tooltip>
+        )}
         <Tooltip label="Run the whole script in one transaction and roll it back on the first error">
           <Switch size="xs" ml={6} label="single transaction" checked={transactional}
             disabled={held !== null}
@@ -311,6 +326,18 @@ export function QueryTab({ tabId, connectionId, dialect, engine = "postgresql", 
         )}
         {result.cancelled && <Text size="xs" c="orange">cancelled</Text>}
       </Group>
+
+      {/* The builder over an OData request. The text in the editor stays the one source of truth:
+          the form is read out of it on every render and writes it back on every change, so typing
+          and clicking are the same gesture said two ways. */}
+      {engine === "odata" && (
+        <Collapse expanded={builderOpen}>
+          <Paper withBorder m={4} radius="sm">
+            <ODataQueryBuilder connectionId={connectionId} variant="query" value={parseQuery(sql)}
+              onChange={(_, built) => setSql(built.text)} onRun={() => execute(sql)} />
+          </Paper>
+        </Collapse>
+      )}
 
       {/* The statement and its result share the tab, and how they share it is the reader's
           business: drag the handle, or double-click it to go back to half and half. */}

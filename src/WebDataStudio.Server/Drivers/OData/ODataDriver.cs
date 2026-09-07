@@ -21,7 +21,14 @@ public sealed class ODataDialect : SqlDialect
     public override bool IsReadOnlyStatement(string sql) => true;
 }
 
-public sealed record ODataProperty(string Name, string Type, bool Nullable, bool IsKey);
+/// One member of an entity: a plain property, or a navigation property — the relation `$expand`
+/// follows. `Type` is the CSDL type as written, so `Collection(Shop.Order)` says both what it
+/// points at and that there are many of them.
+public sealed record ODataProperty(string Name, string Type, bool Nullable, bool IsKey,
+    bool IsNavigation = false)
+{
+    public bool IsCollection => Type.StartsWith("Collection(", StringComparison.Ordinal);
+}
 
 /// The part of a CSDL document the studio needs: which entity sets exist and what their entities
 /// look like. Namespaces differ between OData versions, so elements are matched by local name.
@@ -81,7 +88,13 @@ public sealed class ODataMetadata
                     !keys.Contains(name) && (string?)p.Attribute("Nullable") != "false", keys.Contains(name));
             });
 
-            return inherited.Concat(own).ToList();
+            // The relations, kept rather than skipped: they are what the query builder offers under
+            // $expand, and an entity without them can only ever be read one table at a time.
+            var navigations = type.Elements().Where(e => e.Name.LocalName == "NavigationProperty")
+                .Select(p => new ODataProperty((string?)p.Attribute("Name") ?? "",
+                    (string?)p.Attribute("Type") ?? "", true, false, IsNavigation: true));
+
+            return inherited.Concat(own).Concat(navigations).ToList();
         }
     }
 }
@@ -189,8 +202,11 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
         if (!odata.Metadata.EntitySets.TryGetValue(target.Name, out var properties))
             throw new KeyNotFoundException($"the service has no entity set '{target.Name}'");
 
+        // A navigation property is part of the entity, so it is listed — with what it points at as
+        // its type and a comment saying it is followed rather than read.
         var columns = properties
-            .Select((p, i) => new ColumnInfo(p.Name, p.Type, p.Nullable, null, p.IsKey, false, null, i + 1))
+            .Select((p, i) => new ColumnInfo(p.Name, p.Type, p.Nullable, null, p.IsKey, false,
+                p.IsNavigation ? "navigation property: expand it to read it" : null, i + 1))
             .ToList();
 
         return new ObjectDetail(target, columns, [], [], [], await CountAsync(odata, target.Name, null, ct),
@@ -223,25 +239,58 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
         if (!odata.Metadata.EntitySets.TryGetValue(target.Name, out var properties))
             throw new KeyNotFoundException($"the service has no entity set '{target.Name}'");
 
-        var options = new List<string> { $"$top={query.Limit}", $"$skip={query.Offset}" };
-        string? filter = null, note = null;
+        // What the query builder put together, if it was used. The grid owns the paging either way.
+        var built = ODataOptions.Parse(query.Options);
+        var options = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["$top"] = query.Limit.ToString(),
+            ["$skip"] = query.Offset.ToString(),
+        };
 
-        var sortColumn = properties.FirstOrDefault(p => p.Name.Equals(query.Sort, StringComparison.OrdinalIgnoreCase));
-        if (sortColumn is not null) options.Add($"$orderby={sortColumn.Name}{(query.Desc ? " desc" : "")}");
+        foreach (var (name, value) in built)
+            if (name is not ("$top" or "$skip" or "$count")) options[name] = value;
 
-        var filterColumn = properties.FirstOrDefault(p => p.Name.Equals(query.FilterColumn, StringComparison.OrdinalIgnoreCase));
+        string? note = null;
+
+        // A column header's own sort wins over the builder's: it is the later of the two gestures.
+        var sortColumn = properties.FirstOrDefault(p =>
+            !p.IsNavigation && p.Name.Equals(query.Sort, StringComparison.OrdinalIgnoreCase));
+        if (sortColumn is not null) options["$orderby"] = $"{sortColumn.Name}{(query.Desc ? " desc" : "")}";
+
+        var filterColumn = properties.FirstOrDefault(p =>
+            !p.IsNavigation && p.Name.Equals(query.FilterColumn, StringComparison.OrdinalIgnoreCase));
         if (filterColumn is not null && query.Filter is { Length: > 0 })
         {
-            (filter, note) = ODataFilter.Build(filterColumn, query.Filter);
-            if (filter is not null) options.Add($"$filter={filter}");
+            var (column, columnNote) = ODataFilter.Build(filterColumn, query.Filter);
+            note = columnNote;
+
+            // Both filters hold: the builder's, and the one typed into this column's header.
+            if (column is not null)
+                options["$filter"] = options.TryGetValue("$filter", out var existing) && existing.Length > 0
+                    ? $"({existing}) and ({column})"
+                    : column;
         }
 
-        var url = new Uri(odata.Root, $"{target.Name}?{string.Join('&', options.Select(EscapeOption))}");
+        options.TryGetValue("$filter", out var filter);
+
+        var url = new Uri(odata.Root,
+            $"{target.Name}?{string.Join('&', options.Select(o => $"{o.Key}={Uri.EscapeDataString(o.Value)}"))}");
         var (items, _, error) = await FetchAsync(odata, url, ct);
         if (error is not null) throw new InvalidOperationException(error.Text);
 
-        var columns = properties.Select(p => new ColumnMeta(p.Name, p.Type, p.Nullable)).ToList();
-        var rows = items.Select(item => properties.Select(p =>
+        // $select narrows the columns to the ones asked for; $expand adds one per relation, holding
+        // the JSON the service sent back, which the grid's own viewer opens as a tree.
+        var selected = Names(options, "$select");
+        var expanded = Names(options, "$expand").Select(e => e.Split('(', 2)[0].Trim()).ToList();
+
+        var shown = properties
+            .Where(p => p.IsNavigation
+                ? expanded.Contains(p.Name, StringComparer.OrdinalIgnoreCase)
+                : selected.Count == 0 || selected.Contains(p.Name, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        var columns = shown.Select(p => new ColumnMeta(p.Name, p.Type, p.Nullable)).ToList();
+        var rows = items.Select(item => shown.Select(p =>
             item.ValueKind == JsonValueKind.Object && item.TryGetProperty(p.Name, out var value)
                 ? Value(value)
                 : null).ToArray()).ToList();
@@ -249,12 +298,29 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
         return new TabularPage(columns, rows, await CountAsync(odata, target.Name, filter, ct),
             Editable: false, Reason: "an OData connection only reads", Note: note);
 
-        // Only the value half of an option is escaped: the name and the `=` stay, the space and the
-        // quotes inside the value are what the service needs encoded.
-        static string EscapeOption(string option)
+        // A comma-separated option, split into its names. `$expand=Orders($top=5),Category` keeps
+        // its parentheses together, because a nested option may hold a comma of its own.
+        static List<string> Names(Dictionary<string, string> options, string name)
         {
-            var split = option.Split('=', 2);
-            return $"{split[0]}={Uri.EscapeDataString(split[1])}";
+            if (!options.TryGetValue(name, out var value) || value.Length == 0) return [];
+
+            var found = new List<string>();
+            var depth = 0;
+            var start = 0;
+
+            for (var i = 0; i < value.Length; i++)
+            {
+                if (value[i] == '(') depth++;
+                else if (value[i] == ')') depth--;
+                else if (value[i] == ',' && depth == 0)
+                {
+                    found.Add(value[start..i].Trim());
+                    start = i + 1;
+                }
+            }
+
+            found.Add(value[start..].Trim());
+            return found.Where(f => f.Length > 0).ToList();
         }
     }
 
@@ -453,6 +519,34 @@ public sealed class ODataDriver(HttpMessageHandler? handler = null) : IDbDriver
         // Unwrap: a pooled or tunnelled session is a wrapper around the one this driver opened.
         session.Unwrap() as ODataSession
         ?? throw new InvalidOperationException("this session does not belong to the OData driver");
+}
+
+/// The query options of a request, read back apart. What the query builder sends is exactly what a
+/// person would type into the address bar, so it arrives either raw or percent-encoded.
+public static class ODataOptions
+{
+    public static IReadOnlyList<(string Name, string Value)> Parse(string? query)
+    {
+        if (query is null) return [];
+
+        var text = query.Trim().TrimStart('?');
+        var found = new List<(string, string)>();
+
+        foreach (var part in text.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var split = part.Split('=', 2);
+            if (split.Length != 2) continue;
+
+            var name = split[0].Trim();
+            if (!name.StartsWith('$')) continue;
+
+            // A value that came through a URL is decoded once; one typed by hand has nothing to
+            // decode, and Unescape leaves it alone.
+            found.Add((name, Uri.UnescapeDataString(split[1]).Trim()));
+        }
+
+        return found;
+    }
 }
 
 /// The grid's column filter language, said in OData. One term only: `a b` (and) and `a,b` (or)
