@@ -139,6 +139,7 @@ builder.Services.AddSingleton(sp => new ConnectionStore(
     sp.GetRequiredService<SecretProtector>()));
 builder.Services.AddSingleton<FileRoots>();
 builder.Services.AddSingleton<SessionConnections>();
+builder.Services.AddSingleton(sp => StudioAccess.From(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton(sp => UrlConnectionOptions.From(sp.GetRequiredService<IConfiguration>()));
 builder.Services.AddSingleton<UrlConnectionOpener>();
 builder.Services.AddSingleton<ConnectionRegistry>();
