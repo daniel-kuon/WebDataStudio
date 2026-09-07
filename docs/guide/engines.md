@@ -4,12 +4,12 @@ Every driver declares what its engine supports, and the UI hides the rest. A dri
 capability has to implement it — a test asserts that anything declared unsupported throws instead
 of silently doing nothing.
 
-| Capability | PostgreSQL | MySQL | SQL Server | SQLite | Oracle | DuckDB | ClickHouse | MongoDB | Redis | Storage |
-|---|---|---|---|---|---|---|---|---|---|---|
-| SQL | yes | yes | yes | yes | yes | yes | yes | — | — | yes |
-| Browse as rows | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| Browse a container as rows | — | — | — | — | — | — | — | — | yes | — |
-| Count a column's values | yes | yes | yes | yes | yes | yes | yes | — | — | yes |
+| Capability | PostgreSQL | MySQL | SQL Server | SQLite | Oracle | DuckDB | ClickHouse | MongoDB | Redis | Storage | OData |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| SQL | yes | yes | yes | yes | yes | yes | yes | — | — | yes | — |
+| Browse as rows | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | — |
+| Browse a container as rows | — | — | — | — | — | — | — | — | yes | — | — |
+| Count a column's values | yes | yes | yes | yes | yes | yes | yes | — | — | yes | — |
 | Schemas | yes | — | yes | — | yes | yes | yes | — | — | — |
 | Several databases | yes | yes | yes | — | — | — | yes | yes | yes | — |
 | Transactions | yes | yes | yes | yes | yes | yes | — | — | — | — |
@@ -22,8 +22,8 @@ of silently doing nothing.
 | Foreign keys | yes | yes | yes | yes | yes | yes | — | — | — | — |
 | Partial indexes | yes | — | yes | yes | — | — | — | — | — | — |
 | Include columns | yes | — | yes | — | — | — | — | — | — | — |
-| Estimated plan | yes | yes | yes | yes | yes | yes | yes | yes | — | yes |
-| Actual plan | yes | yes | yes | — | — | yes | — | yes | — | yes |
+| Estimated plan | yes | yes | yes | yes | yes | yes | yes | yes | — | yes | — |
+| Actual plan | yes | yes | yes | — | — | yes | — | yes | — | yes | — |
 | Backup | yes | yes | yes | yes | — | — | — | yes | yes | — |
 | Restore | yes | yes | — | — | — | — | — | yes | — | — |
 | User management | yes | yes | yes | — | yes | — | — | — | — | — |
@@ -31,11 +31,17 @@ of silently doing nothing.
 | Kill session | yes | yes | yes | — | yes | — | yes | yes | yes | — |
 | Server metrics | yes | yes | yes | — | yes | — | yes | yes | yes | — |
 | Slow queries | yes | yes | yes | — | — | — | — | — | — | — |
-| Scheduled jobs | yes | yes | yes | — | — | — | — | — | — | — |
+| Scheduled jobs | yes | yes | yes | — | — | — | — | — | — | — | — |
 | Maintenance commands | yes | yes | yes | yes | yes | yes | yes | yes | yes | — |
 
-MongoDB and Redis are not SQL engines: their query tabs take the engines' own commands, and results
-that are documents render as a JSON tree with a table view for flat ones.
+MongoDB, Redis and OData are not SQL engines: their query tabs take the engines' own commands, and
+results that are documents render as a JSON tree with a table view for flat ones.
+
+An OData connection is the URL of the service root, with `user:pw@` for Basic authentication or
+`bearer:<token>@` for a Bearer token. The explorer lists the entity sets from `$metadata` and the
+query tab takes a resource path with query options, such as
+`Products?$filter=UnitPrice gt 20&$orderby=ProductName&$top=50`. The driver follows the service's
+next links up to the row limit and only ever reads.
 
 They still browse. The data tab asks the driver for a page rather than building a `SELECT`, so a
 MongoDB collection is read with `find().sort().skip().limit()` — including the studio's filter

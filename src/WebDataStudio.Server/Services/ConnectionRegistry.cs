@@ -14,6 +14,7 @@ public sealed class ConnectionRegistry
         // Object storage — S3, Azure Blob, Google Cloud Storage or a folder, told apart by the
         // connection's own URL rather than by a separate engine each.
         "storage",
+        "odata",
     ];
 
     private readonly IReadOnlyList<ConnectionSpec> _environment;

@@ -181,8 +181,8 @@ public static class DataEndpoints
                     if (!driver.Caps.TabularBrowse)
                         return Results.BadRequest(new
                         {
-                            message = $"{driver.Info.Label} has no rows to browse; open the key in " +
-                                      "the key browser instead",
+                            message = $"{driver.Info.Label} has no rows to browse here; open the " +
+                                      "object in its own browser or a query tab instead",
                         });
 
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);

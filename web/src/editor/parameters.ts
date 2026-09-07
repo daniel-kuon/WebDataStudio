@@ -2,10 +2,10 @@ import type { DialectId } from "../sql/splitStatements";
 
 /// Every engine spells a bind variable differently, and the marker character means something else
 /// in a cast or an operator, so this is a scanner rather than a regular expression.
-const MARKER: Record<DialectId | "mongodb" | "redis", string> = {
+const MARKER: Record<DialectId | "mongodb" | "redis" | "odata", string> = {
   postgresql: ":", oracle: ":", sqlite: "$",
   sqlserver: "@", mysql: "@", duckdb: "$", clickhouse: "{",
-  mongodb: "", redis: "",
+  mongodb: "", redis: "", odata: "",
 };
 
 const isNameChar = (c: string) => /[A-Za-z0-9_]/.test(c);

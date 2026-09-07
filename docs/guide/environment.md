@@ -107,10 +107,11 @@ register with the provider is `https://<your studio>/signin-oidc`.
 WDS_CONN_SHOP=postgres://app:pw@db:5432/shop
 WDS_CONN_CACHE=redis://cache:6379
 WDS_CONN_LOCAL=sqlite:///data/local.db
+WDS_CONN_NORTHWIND=https://services.odata.org/V4/Northwind/Northwind.svc/
 ```
 
 Recognised schemes: `postgres`, `postgresql`, `mysql`, `mariadb`, `sqlserver`, `mssql`, `sqlite`,
-`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`.
+`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`. An `http` or `https` URL is an OData service root.
 
 ## Connections as provider connection strings
 

@@ -77,7 +77,8 @@ Both databases land in one studio; a second `studioName` gives you a second stud
 ## Engines
 
 PostgreSQL · MySQL and MariaDB · Microsoft SQL Server · SQLite · Oracle · DuckDB · ClickHouse ·
-MongoDB · Redis · object storage (S3-compatible, Azure Blob, Google Cloud Storage, a folder)
+MongoDB · Redis · object storage (S3-compatible, Azure Blob, Google Cloud Storage, a folder) ·
+OData services
 
 Each driver declares what it can do, and the UI hides what an engine does not support instead of
 offering a button that fails.

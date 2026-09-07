@@ -3,6 +3,7 @@ using WebDataStudio.Server.Drivers.ClickHouse;
 using WebDataStudio.Server.Drivers.DuckDb;
 using WebDataStudio.Server.Drivers.MySql;
 using WebDataStudio.Server.Drivers.MongoDb;
+using WebDataStudio.Server.Drivers.OData;
 using WebDataStudio.Server.Drivers.Oracle;
 using WebDataStudio.Server.Drivers.Redis;
 using WebDataStudio.Server.Drivers.PostgreSql;
@@ -30,6 +31,7 @@ public sealed class DriverRegistry
             new MongoDbDriver(),
             new RedisDriver(),
             new StorageDriver(),
+            new ODataDriver(),
         ];
         _drivers = drivers.ToDictionary(d => d.Info.Id, StringComparer.OrdinalIgnoreCase);
     }

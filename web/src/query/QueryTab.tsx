@@ -317,7 +317,7 @@ export function QueryTab({ tabId, connectionId, dialect, engine = "postgresql", 
       <SplitPane id="query" minTop={100} minBottom={100}
         top={
           <QueryEditor value={sql} dialect={dialect} connectionId={connectionId} error={firstError}
-            language={engine === "mongodb" ? "javascript" : engine === "redis" ? "plaintext" : "sql"}
+            language={engine === "mongodb" ? "javascript" : engine === "redis" || engine === "odata" ? "plaintext" : "sql"}
             onChange={setSql} onRun={execute} onRunAll={execute} onOpenObject={onOpenObject}
             snippets={snippets} />
         }
