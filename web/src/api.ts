@@ -1,3 +1,5 @@
+import type { OpenedConnection } from "./connections/openFromUrl";
+
 export const base = "/api";
 
 export interface Me {
@@ -247,6 +249,15 @@ export const uploadConnectionFile = (file: File, name?: string): Promise<Connect
 
   return fetch(`${base}/connections/file`, { method: "POST", body }).then(r => ok<Connection>(r));
 };
+
+/// What the studio's own `?u=` named. The server decides what is allowed and answers per entry,
+/// so one refused database does not keep the others closed.
+export const openFromUrl = (u: string): Promise<{ opened: OpenedConnection[] }> =>
+  fetch(`${base}/connections/from-url`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ u }),
+  }).then(r => ok<{ opened: OpenedConnection[] }>(r));
 
 export interface BrowseDto {
   /// Null when nothing has been opened yet: the roots are where a picker starts.

@@ -61,6 +61,7 @@ export function ConnectionsPage() {
               <Table.Td>{c.summary}</Table.Td>
               <Table.Td>
                 {c.source === "Environment" && <Badge variant="light">from environment</Badge>}
+                {c.source === "Session" && <Badge color="grape" variant="light">from a link</Badge>}
                 {c.readOnly && <Badge color="orange" variant="light" ml={4}>read-only</Badge>}
                 {c.interactive && <Badge color="blue" variant="light" ml={4}>sign-in</Badge>}
               </Table.Td>
