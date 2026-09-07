@@ -174,6 +174,23 @@ looks like.
 URL is a password in browser history, in proxy logs and in screenshots, so it has to be named on
 purpose.
 
+## What people may do in this studio
+
+Where a connection somebody makes goes, and which ways in exist at all. Every default is what the
+studio did before these settings existed — see
+[Connections](./connections.md#a-studio-anybody-brings-their-own-data-to).
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `WDS_CONNECTION_SCOPE` | `stored` | `stored` writes a new connection to the store for everybody; `session` holds it for the browser that made it and writes nothing down |
+| `WDS_ALLOW_ADD_CONNECTION` | `true` | Whether a connection string may be typed, pasted, imported or tested |
+| `WDS_ALLOW_FILE_UPLOAD` | `true` | Whether a database file may be sent from the browser |
+| `WDS_ALLOW_FILE_BROWSE` | `true` | Whether the server's own folders may be walked |
+| `WDS_SESSION_TTL_MINUTES` | `240` | How long a session may go quiet before its connections and files are dropped. `0` never expires |
+| `WDS_SESSION_MAX_CONNECTIONS` | `25` | How many connections one browser may hold |
+| `WDS_UPLOAD_MAX_MB` | `100` | The largest database file somebody may send |
+| `WDS_CONNECT_HOSTS` | empty | The hosts this studio may connect to at all, comma-separated; `*.example.com` matches one level of subdomain. Empty is no restriction — set it on anything a stranger can reach |
+
 ## Backups on a schedule
 
 `WDS_BACKUP_SCHEDULE_FILE` names a JSON file of jobs, and `WDS_BACKUP_DIR` says where the dumps go

@@ -162,6 +162,23 @@ abgelehnter Zugriff — mit Person, Verbindung und Ergebnis. Zu lesen ist das im
 Administration, der wie alles unter `/api/admin` die Admin-Rolle braucht. Anfragebodies werden nie
 mitgeschrieben: in einem Verbindungsbody steht ein Passwort.
 
+## Was Leute in diesem Studio dürfen
+
+Wohin eine Verbindung geht, die jemand anlegt, und welche Wege hinein es überhaupt gibt. Jeder
+Standard ist das, was das Studio vor diesen Einstellungen getan hat — siehe
+[Verbindungen](./connections.md#ein-studio-zu-dem-jeder-seine-eigenen-daten-mitbringt).
+
+| Variable | Standard | Wirkung |
+| --- | --- | --- |
+| `WDS_CONNECTION_SCOPE` | `stored` | `stored` schreibt eine neue Verbindung für alle in den Store; `session` hält sie für den Browser, der sie angelegt hat, und schreibt nichts auf |
+| `WDS_ALLOW_ADD_CONNECTION` | `true` | Ob eine Verbindungszeichenfolge getippt, eingefügt, importiert oder getestet werden darf |
+| `WDS_ALLOW_FILE_UPLOAD` | `true` | Ob eine Datenbankdatei aus dem Browser gesendet werden darf |
+| `WDS_ALLOW_FILE_BROWSE` | `true` | Ob die Server-Ordner durchsucht werden dürfen |
+| `WDS_SESSION_TTL_MINUTES` | `240` | Wie lange eine Sitzung still sein darf, bevor ihre Verbindungen und Dateien verworfen werden. `0` läuft nie ab |
+| `WDS_SESSION_MAX_CONNECTIONS` | `25` | Wie viele Verbindungen ein Browser halten darf |
+| `WDS_UPLOAD_MAX_MB` | `100` | Die größte Datenbankdatei, die jemand senden darf |
+| `WDS_CONNECT_HOSTS` | leer | Die Hosts, zu denen dieses Studio überhaupt verbinden darf, kommagetrennt; `*.example.com` trifft eine Subdomain-Ebene. Leer heißt keine Einschränkung — setze sie bei allem, was Fremde erreichen können |
+
 ## Backups nach Zeitplan
 
 `WDS_BACKUP_SCHEDULE_FILE` benennt eine JSON-Datei mit Jobs, `WDS_BACKUP_DIR` sagt, wohin die Dumps

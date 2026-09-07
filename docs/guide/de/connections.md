@@ -171,6 +171,65 @@ berichtet das dann, statt Bearbeitbarkeit vorzutäuschen. Gefiltert werden nur S
 ein Bucket, ein Keyspace oder ein Server-Ordner geht durch, denn ein Schema-Filter, der auf einer
 anderen Engine den Baum leert, wäre ein Fehler.
 
+## Ein Studio, zu dem jeder seine eigenen Daten mitbringt
+
+Alles oben geht von einer Art Deployment aus: jemand schreibt die Verbindungen auf, ein Team öffnet
+das Studio, alle sehen dieselben Datenbanken. Es gibt noch eine — ein Studio im offenen Internet als
+Viewer, bei dem jeder Besucher seine eigene Datenbank mitbringt und die der anderen nicht sieht.
+Zwei Einstellungen machen daraus dieses Studio, und beide ändern nichts, solange sie nicht gesetzt
+sind.
+
+**Wohin geht eine neue Verbindung?** `WDS_CONNECTION_SCOPE`:
+
+| Wert | Bedeutung |
+| --- | --- |
+| `stored` (Standard) | In den Verbindungs-Store: aufgeschrieben, übersteht Neustarts, jeder, der sie sehen darf, sieht sie |
+| `session` | In den Browser, der sie angelegt hat, und in keinen anderen. Nichts auf Platte, weg beim Neustart des Studios oder wenn die Sitzung abläuft |
+
+Im `session`-Scope landen Formular, Upload, Import und ein `?u=`-Link am selben Ort: in der Liste
+dieses Browsers. Die Verbindungsliste sagt das und bietet **Forget my connections** — ein Knopf für
+alles Mitgebrachte, Dateien inklusive.
+
+**Welche Wege hinein gibt es überhaupt?** Drei Schalter, alle an, solange ein Deployment nichts
+anderes sagt:
+
+| Variable | Die Tür, die sie schließt |
+| --- | --- |
+| `WDS_ALLOW_ADD_CONNECTION=false` | Das Formular. Auch Import und das Testen einer Verbindung — letzteres öffnet, was man ihm gibt, und behält nichts, was es zur billigsten Tür der vier macht |
+| `WDS_ALLOW_FILE_UPLOAD=false` | Eine Datenbankdatei vom Rechner des Besuchers |
+| `WDS_ALLOW_FILE_BROWSE=false` | Das Durchsuchen der Server-Ordner |
+
+Eine geschlossene Tür nimmt ihren Knopf mit, statt einen zu zeigen, der mit einer Ablehnung
+antwortet — und die Ablehnung, für alle, die die API direkt fragen, nennt die Einstellung, die es
+erlauben würde.
+
+„Niemand darf etwas hinzufügen" sind diese drei auf `false`. Das ist auch allein nützlich: ein
+Deployment, dessen Verbindungen aus einem App-Host kommen, schließt das Formular und lässt den Rest.
+
+### Eine Sitzung, die endet
+
+`WDS_SESSION_TTL_MINUTES` (Standard 240, `0` heißt nie) ist, wie lange eine Sitzung still sein darf,
+bevor ihre Verbindungen und die Dateien dahinter verworfen werden; ein Sweeper läuft alle fünf
+Minuten. `WDS_SESSION_MAX_CONNECTIONS` (25) ist, wie viele ein Browser gleichzeitig halten darf.
+
+Das Cookie, das Besucher trennt, ist `HttpOnly` und über https `Secure`. Es ist keine
+Sicherheitsgrenze: wer das Cookie eines anderen kopiert, bekommt dessen Verbindungen.
+
+### Die Hosts, die das Studio erreichen darf
+
+Ein Studio, in das jeder eine Verbindungszeichenfolge tippen darf, ist ein Verbinder nach außen von
+dort, wo es läuft: ein Besucher erreicht damit Adressen, die nur der Server erreicht.
+`WDS_CONNECT_HOSTS` — standardmäßig leer, also keine Einschränkung — ist eine kommagetrennte
+Positivliste, gegen die jedes Verbindungsziel geprüft wird, egal woher die Verbindung kommt:
+Formular, Test, Link, Store, Umgebung. `*.example.com` trifft eine Subdomain-Ebene, dieselbe Regel
+wie bei der Download-Liste.
+
+Eine Verbindung, deren Host nicht in der Liste steht, wird gar nicht angeboten — auch eine, die vor
+dem Setzen der Liste aufgeschrieben wurde: eine Verbindung aus der Umgebung darf nicht der Weg daran
+vorbei sein. Eine Verbindungszeichenfolge, aus der sich kein Host lesen lässt, wird bei gesetzter
+Liste abgelehnt, denn Raten würde die Liste zu einem Vorschlag machen. Setze sie bei allem, was
+Fremde erreichen können; siehe [Deployment](../deploy.md#exposure).
+
 ## Eigenschaften
 
 **Properties…** auf einer Verbindung, ihrer Datenbank oder einem Schema zeigt, was diese Verbindung

@@ -8,6 +8,44 @@ A section here is the body of that release: the release workflow reads the one t
 (`scripts/release-notes.mjs`) and the generated commit list follows it. So a new version is written
 down here *before* it is tagged — a tag with no section still publishes, with the commit list alone.
 
+## Unreleased
+
+### A studio anybody brings their own data to
+
+Everything the studio did until now assumed one kind of deployment: somebody writes the connections
+down, a team opens the studio, everybody sees the same databases. This release adds the other one —
+a studio on the open internet as a viewer, where every visitor brings their own database and sees
+nobody else's. Nothing changes for the first kind: every default is what it was.
+
+- **Where a new connection goes.** `WDS_CONNECTION_SCOPE=session` holds what somebody makes for the
+  browser that made it: the form, an upload, an import and a `?u=` link all land there, nothing
+  reaches the store, and the next visitor's list is empty. `stored` is the default and is what the
+  studio always did.
+- **Which ways in exist at all.** `WDS_ALLOW_ADD_CONNECTION`, `WDS_ALLOW_FILE_UPLOAD` and
+  `WDS_ALLOW_FILE_BROWSE` each close one door — the form (including importing and testing a
+  connection, which opens whatever it is given), a file from the visitor's machine, and walking the
+  server's own folders. A closed door takes its button with it, and the refusal names the setting.
+  Useful well beyond a public studio: a deployment whose connections come from an app host can now
+  close the form and keep everything else.
+- **A session that ends.** `WDS_SESSION_TTL_MINUTES` (240, `0` for never) drops a session that has
+  gone quiet along with the files it brought; `WDS_SESSION_MAX_CONNECTIONS` (25) caps what one
+  browser holds; `WDS_UPLOAD_MAX_MB` (100) caps a file. **Forget my connections** throws the lot
+  away now, cookie included.
+- **The hosts the studio may reach.** `WDS_CONNECT_HOSTS` is checked at every door and against every
+  source, including connections from the store and the environment — a studio anybody may type a
+  connection string into is otherwise an outbound connector from wherever it runs. Empty by default,
+  which is no restriction; the deploy guide says why to set it.
+- **The empty state is the product.** With no connections the page says what to bring, listing only
+  the ways this deployment left open, and says once that what you open belongs to this browser.
+
+### Fixed
+
+- A session connection can be renamed and deleted by the browser that owns it. It used to refuse
+  with "opened from a link, nothing to delete", which was right while a link was the only way to
+  make one.
+- A `?u=` file entry can no longer name a path inside the uploads tree. Those folder names are GUIDs
+  and not guessable, but a path that leaked would have opened another visitor's database.
+
 ## 1.4.0
 
 A database that is a file, and a link that opens one.

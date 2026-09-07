@@ -119,6 +119,60 @@ A managed identity needs none of this and remains the better answer wherever it 
 A bucket is a connection too: `s3://`, `azblob://`, `gs://` and `file://` open object storage in
 the same tree, where a file can be queried as a table — see [Object storage](storage.md).
 
+## A studio anybody brings their own data to
+
+Everything above assumes one kind of deployment: somebody writes the connections down, a team opens
+the studio, everybody sees the same databases. There is another — a studio on the open internet as a
+viewer, where every visitor brings their own database and sees nobody else's. Two settings make that
+one, and neither changes anything unless it is set.
+
+**Where does a new connection go?** `WDS_CONNECTION_SCOPE`:
+
+| Value | What it means |
+| --- | --- |
+| `stored` (default) | The connection store: written down, kept across restarts, everybody who may see it does |
+| `session` | The browser that made it, and nobody else. Nothing on disk, gone when the studio restarts or the session expires |
+
+In `session` scope the form, an upload, an import and a `?u=` link all end up in the same place: this
+browser's own list. The connection list says so, and offers **Forget my connections** — one button
+for everything you brought, files included.
+
+**Which ways in exist at all?** Three switches, all on unless a deployment says otherwise:
+
+| Variable | The door it closes |
+| --- | --- |
+| `WDS_ALLOW_ADD_CONNECTION=false` | The form. Also importing, and testing a connection — that one opens whatever it is given and keeps nothing, which makes it the cheapest door of the four |
+| `WDS_ALLOW_FILE_UPLOAD=false` | A database file from the visitor's machine |
+| `WDS_ALLOW_FILE_BROWSE=false` | Walking the server's own folders |
+
+A closed door takes its button with it rather than showing one that answers with a refusal, and the
+refusal — for anybody who asks the API directly — names the setting that would allow it.
+
+"Nobody may add anything" is those three set to `false`. That is worth having on its own: a
+deployment whose connections come from an app host can close the form and keep everything else.
+
+### A session that ends
+
+`WDS_SESSION_TTL_MINUTES` (240 by default, `0` meaning never) is how long a session may go quiet
+before its connections and the files behind them are dropped; a sweeper runs every five minutes.
+`WDS_SESSION_MAX_CONNECTIONS` (25) is how many one browser may hold at once.
+
+The cookie that separates visitors is `HttpOnly` and `Secure` over https. It is not a security
+boundary: somebody who copies another person's cookie gets that person's connections.
+
+### The hosts the studio may reach
+
+A studio anybody may type a connection string into is an outbound connector from wherever it runs: a
+visitor can reach addresses only the server can reach. `WDS_CONNECT_HOSTS` — empty by default, so no
+restriction — is a comma-separated allow-list every connection target is checked against, wherever
+the connection came from: the form, a test, a link, the store, the environment. `*.example.com`
+matches one level of subdomain, the same rule the download list uses.
+
+A connection whose host is outside the list is not offered at all, including one written down before
+the list was set — a connection from the environment must not become the way around it. A connection
+string no host can be read from is refused while the list is set, because guessing would make the
+list a suggestion. Set it on anything a stranger can reach; see [Deploying](deploy.md#exposure).
+
 ## Properties
 
 **Properties…** on a connection, its database or a schema opens what that connection is: the name,
