@@ -131,10 +131,10 @@ public class SessionConnectionsTests : IDisposable
         Assert.Equal("Session", connection.GetProperty("source").GetString());
     }
 
-    /// Nothing about it is stored, so there is nothing to edit or delete — and the answer says that
-    /// rather than pretending or failing.
+    /// It is this browser's connection, so this browser may drop it. Nothing is stored, so there is
+    /// nothing left behind once it is gone.
     [Fact]
-    public async Task A_session_connection_cannot_be_edited_or_deleted_like_a_stored_one()
+    public async Task The_browser_it_belongs_to_may_delete_it()
     {
         using var factory = Factory();
         using var client = factory.CreateClient();
@@ -145,8 +145,35 @@ public class SessionConnectionsTests : IDisposable
 
         var deleted = await client.DeleteAsync("/api/connections/from-link", Ct);
 
-        Assert.Equal(HttpStatusCode.BadRequest, deleted.StatusCode);
-        Assert.Contains("from a link", await deleted.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
+        Assert.Empty(sessions.For(sessions.Keys.First()));
+    }
+
+    /// And nobody else's browser may: it does not exist for them, which is a 404 rather than a
+    /// refusal that would confirm it is there.
+    [Fact]
+    public async Task Another_browser_cannot_touch_it()
+    {
+        using var factory = Factory();
+        using var mine = factory.CreateClient();
+        using var theirs = factory.CreateClient();
+
+        await mine.GetAsync("/api/connections", Ct);
+        await theirs.GetAsync("/api/connections", Ct);
+
+        var sessions = factory.Services.GetRequiredService<SessionConnections>();
+        var keys = sessions.Keys.ToList();
+        sessions.Add(keys[0], Spec("from-link", "LINK"));
+
+        // Whichever client owns the key, exactly one of them may delete it and the other gets a 404.
+        var answers = new[]
+        {
+            (await mine.DeleteAsync("/api/connections/from-link", Ct)).StatusCode,
+            (await theirs.DeleteAsync("/api/connections/from-link", Ct)).StatusCode,
+        };
+
+        Assert.Contains(HttpStatusCode.NoContent, answers);
+        Assert.Contains(HttpStatusCode.NotFound, answers);
     }
 
     /// A session connection is a connection: the studio opens it like any other, which is what makes

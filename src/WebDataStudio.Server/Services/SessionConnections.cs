@@ -46,10 +46,15 @@ public sealed class SessionConnections(IHttpContextAccessor accessor)
     }
 
     /// Keeps one connection for one browser. The same id twice is the same connection, so a link
-    /// opened again does not pile up.
+    /// opened again does not pile up — and a connection made in the form arrives without an id,
+    /// which is where it gets one.
     public ConnectionSpec Add(string key, ConnectionSpec spec)
     {
-        var session = spec with { Source = ConnectionSource.Session };
+        var session = spec with
+        {
+            Id = spec.Id is { Length: > 0 } given ? given : Guid.NewGuid().ToString("n"),
+            Source = ConnectionSource.Session,
+        };
 
         _byKey.GetOrAdd(key, _ => new ConcurrentDictionary<string, ConnectionSpec>(StringComparer.Ordinal))
             [session.Id] = session;
@@ -75,6 +80,17 @@ public sealed class SessionConnections(IHttpContextAccessor accessor)
             return key is { Length: > 0 } ? For(key) : [];
         }
     }
+
+    /// Drops one connection from one browser. False when it was not there, which the caller
+    /// answers as a 404: a connection somebody else owns does not exist for you.
+    public bool Remove(string key, string id) =>
+        _byKey.TryGetValue(key, out var found) && found.TryRemove(id, out _);
+
+    /// A folder name for one session's files. The key itself is a cookie value and has no business
+    /// being a path on disk.
+    public static string FolderFor(string key) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(key)))[..16];
 
     /// Remembers a key even before it has connections, so `Keys` says who is here.
     public void Remember(string key) =>

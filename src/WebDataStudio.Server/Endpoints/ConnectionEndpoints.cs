@@ -36,15 +36,24 @@ public static class ConnectionEndpoints
         api.MapGet("/", (ConnectionRegistry registry) =>
             Results.Ok(registry.All().Select(ConnectionRegistry.ToDto)));
 
-        api.MapPost("/", (ConnectionRequest body, ConnectionStore store, StudioAccess access) =>
+        api.MapPost("/", (ConnectionRequest body, HttpContext ctx, ConnectionStore store,
+            SessionConnections sessions, StudioAccess access) =>
         {
             if (!access.MayAdd) return AddingIsClosed();
             if (Validate(body) is { } error) return error;
+
+            var draft = new ConnectionSpec("", body.Name.Trim(), body.Engine, body.ConnectionString,
+                body.ReadOnly, body.Color, body.Group, ConnectionSource.Stored, body.Tunnel);
+
+            // A studio anybody brings their own data to keeps what they make for their browser
+            // alone: nothing on disk, nobody else's list.
+            if (access.Scope == ConnectionScope.Session)
+                return Results.Ok(ConnectionRegistry.ToDto(
+                    sessions.Add(SessionConnections.Key(ctx), draft)));
+
             try
             {
-                var added = store.Add(new ConnectionSpec("", body.Name.Trim(), body.Engine,
-                    body.ConnectionString, body.ReadOnly, body.Color, body.Group, ConnectionSource.Stored,
-                    body.Tunnel));
+                var added = store.Add(draft);
                 return Results.Ok(ConnectionRegistry.ToDto(added));
             }
             catch (InvalidOperationException e)
@@ -53,13 +62,33 @@ public static class ConnectionEndpoints
             }
         });
 
-        api.MapPut("/{id}", async (string id, ConnectionRequest body, ConnectionRegistry registry,
-            ConnectionStore store, SessionPool pool) =>
+        api.MapPut("/{id}", async (string id, ConnectionRequest body, HttpContext ctx,
+            ConnectionRegistry registry, ConnectionStore store, SessionConnections sessions,
+            SessionPool pool) =>
         {
+            // `Find` only answers with what this request may see, so somebody else's session
+            // connection is a 404 here rather than a refusal that would confirm it exists.
             if (registry.Find(id) is not { } existing) return Results.NotFound();
             if (existing.Source == ConnectionSource.Environment) return EnvironmentIsReadOnly();
-            if (existing.Source == ConnectionSource.Session) return OpenedFromALink();
             if (Validate(body) is { } error) return error;
+
+            // A connection this browser owns is edited where it lives: in memory, under its key.
+            if (existing.Source == ConnectionSource.Session)
+            {
+                var edited = sessions.Add(SessionConnections.Key(ctx), existing with
+                {
+                    Name = body.Name.Trim(),
+                    Engine = body.Engine,
+                    ConnectionString = body.ConnectionString,
+                    ReadOnly = body.ReadOnly,
+                    Color = body.Color,
+                    Group = body.Group,
+                    Tunnel = body.Tunnel,
+                });
+
+                await pool.EvictAsync(id);
+                return Results.Ok(ConnectionRegistry.ToDto(edited));
+            }
 
             store.Update(existing with
             {
@@ -79,19 +108,24 @@ public static class ConnectionEndpoints
             return Results.Ok(ConnectionRegistry.ToDto(registry.Find(id)!));
         });
 
-        api.MapDelete("/{id}", async (string id, ConnectionRegistry registry, ConnectionStore store,
-            SessionPool pool, FileRoots roots) =>
+        api.MapDelete("/{id}", async (string id, HttpContext ctx, ConnectionRegistry registry,
+            ConnectionStore store, SessionConnections sessions, SessionPool pool, FileRoots roots) =>
         {
             if (registry.Find(id) is not { } existing) return Results.NotFound();
             if (existing.Source == ConnectionSource.Environment) return EnvironmentIsReadOnly();
-            if (existing.Source == ConnectionSource.Session) return OpenedFromALink();
 
-            store.Delete(id);
+            var session = existing.Source == ConnectionSource.Session
+                ? SessionConnections.Key(ctx)
+                : null;
+
+            if (session is not null) sessions.Remove(session, id);
+            else store.Delete(id);
+
             await pool.EvictAsync(id);
 
             // An uploaded database belongs to its connection: it goes with it rather than staying
             // behind as a file nobody can name any more.
-            var uploaded = ConnectionFileEndpoints.UploadDirectoryFor(roots, id);
+            var uploaded = ConnectionFileEndpoints.UploadDirectoryFor(roots, id, session);
             if (Directory.Exists(uploaded)) Directory.Delete(uploaded, true);
 
             return Results.NoContent();
@@ -155,8 +189,8 @@ public static class ConnectionEndpoints
         api.MapGet("/export", (ConnectionRegistry registry) =>
             Results.Ok(registry.All().Select(ToPortable)));
 
-        api.MapPost("/import", (List<PortableConnection> body, ConnectionStore store,
-            StudioAccess access) =>
+        api.MapPost("/import", (List<PortableConnection> body, HttpContext ctx,
+            ConnectionStore store, SessionConnections sessions, StudioAccess access) =>
         {
             if (!access.MayAdd) return AddingIsClosed();
 
@@ -179,11 +213,22 @@ public static class ConnectionEndpoints
                     entry.Database is { Length: > 0 } ? $"Database={entry.Database}" : null,
                 }.Where(p => p is not null));
 
+                var spec = new ConnectionSpec("", entry.Name.Trim(), entry.Engine,
+                    draft.Length > 0 ? draft : " ", entry.ReadOnly, entry.Color, entry.Group,
+                    ConnectionSource.Stored);
+
+                // Importing is the form with a file in front of it, so it lands where the form
+                // lands: in this browser's own list when that is what the studio does.
+                if (access.Scope == ConnectionScope.Session)
+                {
+                    sessions.Add(SessionConnections.Key(ctx), spec);
+                    imported.Add(entry.Name);
+                    continue;
+                }
+
                 try
                 {
-                    store.Add(new ConnectionSpec("", entry.Name.Trim(), entry.Engine,
-                        draft.Length > 0 ? draft : " ", entry.ReadOnly, entry.Color, entry.Group,
-                        ConnectionSource.Stored));
+                    store.Add(spec);
                     imported.Add(entry.Name);
                 }
                 catch (InvalidOperationException e)
@@ -365,15 +410,6 @@ public static class ConnectionEndpoints
     private static IResult EnvironmentIsReadOnly() =>
         Results.Json(new { message = "connections defined in the environment are read-only" },
             statusCode: StatusCodes.Status403Forbidden);
-
-    /// Nothing about it is stored, so there is nothing to edit or delete. Said rather than answered
-    /// with a 404 about a connection that is plainly in the list.
-    private static IResult OpenedFromALink() =>
-        Results.BadRequest(new
-        {
-            message = "this connection was opened from a link; it is not stored, and it ends with "
-                      + "the session",
-        });
 
     private static IResult? Validate(ConnectionRequest body)
     {

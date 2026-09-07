@@ -12,13 +12,20 @@ public static class ConnectionFileEndpoints
 {
     /// One folder per connection, named by its id: two uploads called `shop.db` are two databases,
     /// and the second must not land on the first.
-    public static string UploadDirectoryFor(FileRoots roots, string connectionId) =>
-        Path.Combine(roots.Uploads, connectionId);
+    ///
+    /// A file a session owns lives one level deeper, under a folder named after the session, so that
+    /// everything one visitor brought can be swept in one move when they are gone.
+    public static string UploadDirectoryFor(FileRoots roots, string connectionId,
+        string? sessionKey = null) =>
+        sessionKey is { Length: > 0 } key
+            ? Path.Combine(roots.Uploads, "session", SessionConnections.FolderFor(key), connectionId)
+            : Path.Combine(roots.Uploads, connectionId);
 
     public static void MapConnectionFileEndpoints(this WebApplication app)
     {
         app.MapPost("/api/connections/file", async (HttpRequest request, FileRoots roots,
-            ConnectionStore store, StudioAccess access, CancellationToken ct) =>
+            ConnectionStore store, SessionConnections sessions, StudioAccess access,
+            CancellationToken ct) =>
         {
             // Before the body is read: a closed door should not first take a database off somebody.
             if (!access.MayUpload)
@@ -63,9 +70,13 @@ public static class ConnectionFileEndpoints
                               + "SQLite, DuckDB, Parquet, CSV and NDJSON are",
                 });
 
-            // The id is decided here so it can name the folder; the store keeps it.
+            // The id is decided here so it can name the folder; whoever keeps the connection
+            // keeps the id.
             var id = Guid.NewGuid().ToString("n");
-            var directory = UploadDirectoryFor(roots, id);
+            var session = access.Scope == ConnectionScope.Session
+                ? SessionConnections.Key(request.HttpContext)
+                : null;
+            var directory = UploadDirectoryFor(roots, id, session);
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, fileName);
 
@@ -86,6 +97,15 @@ public static class ConnectionFileEndpoints
             }
 
             var name = form["name"].ToString() is { Length: > 0 } given ? given : fileName;
+
+            // A studio where connections belong to one browser: nothing is written down, so there is
+            // no shared name to collide with and nothing for the loop below to work around.
+            if (session is not null)
+                return Results.Ok(ConnectionRegistry.ToDto(sessions.Add(session,
+                    new ConnectionSpec(id, name, FileConnections.EngineOf(kind),
+                        FileConnections.ConnectionStringFor(kind, path),
+                        FileConnections.ReadOnlyByNature(kind), null, null,
+                        ConnectionSource.Session))));
 
             // Uploading yesterday's export and today's is uploading two files with one name, which
             // the store refuses — rightly, a name is how a connection is addressed. So the second
