@@ -56,6 +56,15 @@ public static class ConnectionFileEndpoints
             if (file is null || file.Length == 0)
                 return Results.BadRequest(new { message = "no file was sent" });
 
+            // Checked before the copy: half a database on the disk of a studio anybody can reach is
+            // what this setting exists to prevent.
+            if (file.Length > access.UploadMaxBytes)
+                return Results.Json(new
+                {
+                    message = $"this file is larger than the {access.UploadMaxBytes / (1024 * 1024)} MB "
+                              + "this studio takes (WDS_UPLOAD_MAX_MB)",
+                }, statusCode: StatusCodes.Status413PayloadTooLarge);
+
             var fileName = Path.GetFileName(file.FileName);
 
             if (FileConnections.Refusal(fileName) is { } refusal)

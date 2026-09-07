@@ -30,6 +30,14 @@ if (args.Contains("--install-storage-extensions"))
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 
+// An uploaded database may be large, and Kestrel's own default of 30 MB would refuse it with a
+// status code nobody here wrote. The studio's own cap is what decides — see WDS_UPLOAD_MAX_MB — so
+// both limits are raised to it and the endpoint answers for itself.
+var uploadMaxBytes = StudioAccess.From(builder.Configuration).UploadMaxBytes;
+builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = uploadMaxBytes + 1024 * 1024);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(
+    o => o.MultipartBodyLengthLimit = uploadMaxBytes + 1024 * 1024);
+
 // Enums travel as their names: "Table", not 8. The SPA switches on these strings.
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
