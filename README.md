@@ -9,6 +9,10 @@
   A database studio that runs in your browser. One container, nine engines, no install.
 </p>
 
+<p>
+  <img src="https://fgilde.github.io/WebDataStudio/assets/screenshots/chart-dark.png"/>
+</p>
+
 <p align="center">
   <a href="https://fgilde.github.io/WebDataStudio/">Documentation</a> ·
   <a href="https://fgilde.github.io/WebDataStudio/#/de/">Dokumentation (Deutsch)</a> ·
