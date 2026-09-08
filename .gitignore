@@ -7,3 +7,8 @@ dist/
 /data/
 src/WebDataStudio.Server/wwwroot/
 samples/WebDataStudio.AppHost/.data/
+# What a quickrun.yml start leaves in the workspace: the studio's own database
+# (DB_PATH) and the key it encrypts stored connection secrets with.
+/wds.db
+/wds.db-*
+/.key
