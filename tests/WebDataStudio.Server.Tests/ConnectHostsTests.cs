@@ -85,6 +85,18 @@ public class ConnectHostsTests : IDisposable
         Assert.NotNull(hosts.Refuse("postgresql", "Host=db.other.com;Username=u"));
     }
 
+    /// A connection string that is a URL and then a line per header — an OData service is written
+    /// that way — carries its host on the first line.
+    [Fact]
+    public void The_host_is_read_from_the_first_line_of_a_multi_line_string()
+    {
+        var service = "https://services.example/V4/Northwind/\nX-Api-Key: abc";
+
+        Assert.Equal("services.example", ConnectHosts.HostOf("odata", service));
+        Assert.Null(Hosts("services.example").Refuse("odata", service));
+        Assert.NotNull(Hosts("other.example").Refuse("odata", service));
+    }
+
     /// Guessing would make the list a suggestion.
     [Fact]
     public void A_string_with_no_readable_host_is_refused_while_the_list_is_set()
