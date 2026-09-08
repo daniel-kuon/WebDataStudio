@@ -10,40 +10,48 @@ of silently doing nothing.
 | Browse as rows | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | Browse a container as rows | — | — | — | — | — | — | — | — | yes | — | — |
 | Count a column's values | yes | yes | yes | yes | yes | yes | yes | — | — | yes | — |
-| Schemas | yes | — | yes | — | yes | yes | yes | — | — | — |
-| Several databases | yes | yes | yes | — | — | — | yes | yes | yes | — |
-| Transactions | yes | yes | yes | yes | yes | yes | — | — | — | — |
-| DDL | yes | yes | yes | yes | yes | yes | yes | — | — | — |
-| Views | yes | yes | yes | yes | yes | yes | yes | — | — | — |
-| Materialised views | yes | — | — | — | yes | — | yes | — | — | — |
-| Stored procedures | yes | yes | yes | — | yes | — | — | — | — | — |
-| Triggers | yes | yes | yes | yes | yes | — | — | — | — | — |
-| Sequences | yes | — | yes | — | yes | yes | — | — | — | — |
-| Foreign keys | yes | yes | yes | yes | yes | yes | — | — | — | — |
-| Partial indexes | yes | — | yes | yes | — | — | — | — | — | — |
-| Include columns | yes | — | yes | — | — | — | — | — | — | — |
+| Schemas | yes | — | yes | — | yes | yes | yes | — | — | — | — |
+| Several databases | yes | yes | yes | — | — | — | yes | yes | yes | — | — |
+| Transactions | yes | yes | yes | yes | yes | yes | — | — | — | — | — |
+| DDL | yes | yes | yes | yes | yes | yes | yes | — | — | — | — |
+| Views | yes | yes | yes | yes | yes | yes | yes | — | — | — | — |
+| Materialised views | yes | — | — | — | yes | — | yes | — | — | — | — |
+| Stored procedures | yes | yes | yes | — | yes | — | — | — | — | — | — |
+| Triggers | yes | yes | yes | yes | yes | — | — | — | — | — | — |
+| Sequences | yes | — | yes | — | yes | yes | — | — | — | — | — |
+| Foreign keys | yes | yes | yes | yes | yes | yes | — | — | — | — | — |
+| Partial indexes | yes | — | yes | yes | — | — | — | — | — | — | — |
+| Include columns | yes | — | yes | — | — | — | — | — | — | — | — |
 | Estimated plan | yes | yes | yes | yes | yes | yes | yes | yes | — | yes | — |
 | Actual plan | yes | yes | yes | — | — | yes | — | yes | — | yes | — |
-| Backup | yes | yes | yes | yes | — | — | — | yes | yes | — |
-| Restore | yes | yes | — | — | — | — | — | yes | — | — |
-| User management | yes | yes | yes | — | yes | — | — | — | — | — |
-| Session list | yes | yes | yes | — | yes | — | yes | yes | yes | — |
-| Kill session | yes | yes | yes | — | yes | — | yes | yes | yes | — |
-| Server metrics | yes | yes | yes | — | yes | — | yes | yes | yes | — |
-| Slow queries | yes | yes | yes | — | — | — | — | — | — | — |
+| Backup | yes | yes | yes | yes | — | — | — | yes | yes | — | — |
+| Restore | yes | yes | — | — | — | — | — | yes | — | — | — |
+| User management | yes | yes | yes | — | yes | — | — | — | — | — | — |
+| Session list | yes | yes | yes | — | yes | — | yes | yes | yes | — | — |
+| Kill session | yes | yes | yes | — | yes | — | yes | yes | yes | — | — |
+| Server metrics | yes | yes | yes | — | yes | — | yes | yes | yes | — | — |
+| Slow queries | yes | yes | yes | — | — | — | — | — | — | — | — |
 | Scheduled jobs | yes | yes | yes | — | — | — | — | — | — | — | — |
-| Maintenance commands | yes | yes | yes | yes | yes | yes | yes | yes | yes | — |
+| Maintenance commands | yes | yes | yes | yes | yes | yes | yes | yes | yes | — | — |
 
 MongoDB, Redis and OData are not SQL engines: their query tabs take the engines' own commands, and
 results that are documents render as a JSON tree with a table view for flat ones.
 
 An OData connection is the URL of the service root, with `user:pw@` for Basic authentication or
-`bearer:<token>@` for a Bearer token. A service that wants a session cookie or an API key gets it
-as a further line under the URL, `Cookie: name=value` or `X-Api-Key: value`. The explorer lists the entity sets from `$metadata` and the
-query tab takes a resource path with query options, such as
+`bearer:<token>@` for a Bearer token. A service that wants a session cookie or an API key gets it as
+a further line under the URL, `Cookie: name=value` or `X-Api-Key: value` — the studio's own server
+makes the request, so a browser's cookies never reach it. The explorer lists the entity sets from
+`$metadata` and the query tab takes a resource path with query options, such as
 `Products?$filter=UnitPrice gt 20&$orderby=ProductName&$top=50`. The data tab pages, sorts and
 filters through the same options, so the service does the work. The driver follows the service's
-next links up to the row limit and only ever reads.
+next links up to the row limit and only ever reads. The
+[query builder](query-builder.md#odata-services) writes those options for you.
+
+One thing to know before opening this to other people: an OData connection makes the *server* fetch
+a URL somebody typed. On a studio a stranger can reach — see
+[what people may do in this studio](connections.md#a-studio-anybody-brings-their-own-data-to) —
+`WDS_CONNECT_HOSTS` is what keeps that from being a way into the rest of the network, and it is
+checked for an OData service like for any other target.
 
 Neither tab needs the syntax typed: the wand button opens the [query builder](query-builder.md),
 which reads the service's own `$metadata` and offers the fields, the relations, the conditions and

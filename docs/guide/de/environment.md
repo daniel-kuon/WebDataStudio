@@ -50,10 +50,12 @@
 WDS_CONN_SHOP=postgres://app:pw@db:5432/shop
 WDS_CONN_CACHE=redis://cache:6379
 WDS_CONN_LOCAL=sqlite:///data/local.db
+WDS_CONN_NORTHWIND=https://services.odata.org/V4/Northwind/Northwind.svc/
 ```
 
 Erkannte Schemata: `postgres`, `postgresql`, `mysql`, `mariadb`, `sqlserver`, `mssql`, `sqlite`,
-`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`.
+`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`. Eine `http`- oder `https`-URL ist die
+Service-Root eines OData-Dienstes.
 
 **Mehrere Pfade in einer Einstellung.** `WDS_SAVED_QUERIES_DIR`, `WDS_EXPORT_TEMPLATES_DIR`,
 `WDS_QUALITY_FILE`, `WDS_SEED_SQL`, `WDS_CONNECTIONS_FILE`, `WDS_MASK_FILE`,
