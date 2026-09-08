@@ -1,3 +1,5 @@
+import type { OpenedConnection } from "./connections/openFromUrl";
+
 export const base = "/api";
 
 export interface Me {
@@ -12,10 +14,25 @@ export interface Me {
   /// The identity provider, where one is configured. `only` means there are no local accounts, so
   /// the login screen has nothing else to offer.
   sso?: { enabled: boolean; label: string; only: boolean };
+  /// Absent only on a studio older than the setting; the hook fills in the permissive default.
+  access?: StudioAccess;
 }
+/// What this deployment lets people do: where a connection they make goes, and which ways in are
+/// open. The browser cannot read environment variables, so a hidden button has to be hidden by the
+/// server's own answer.
+export interface StudioAccess {
+  scope: "Stored" | "Session";
+  mayAdd: boolean;
+  mayUpload: boolean;
+  mayBrowse: boolean;
+}
+
 export interface Connection {
   id: string; name: string; engine: string; readOnly: boolean;
-  color: string | null; group: string | null; source: "Environment" | "Stored"; summary: string;
+  color: string | null; group: string | null;
+  /// "Session" is a connection opened from the studio's own URL: it belongs to this browser
+  /// and ends with the session.
+  source: "Environment" | "Stored" | "Session"; summary: string;
   tunnelled: boolean;
   /// This connection is one a person signs in to rather than one the machine can open on its own.
   interactive?: boolean;
@@ -78,6 +95,12 @@ export interface HealthDto {
 export const health = (): Promise<HealthDto> => fetch(`${base}/health`).then(r => ok<HealthDto>(r));
 
 // Login must not trigger the unauthorized handler: a wrong password is an expected answer here.
+/// Everything this browser brought, gone now: connections, files and the cookie that named them.
+export const forgetSession = (): Promise<void> =>
+  fetch(`${base}/connections/forget`, { method: "POST" }).then(r => {
+    if (!r.ok) throw new Error("the studio could not forget this session");
+  });
+
 export const login = (username: string, password: string): Promise<Me> =>
   fetch(`${base}/auth/login`, json("POST", { username, password })).then(async r => {
     if (!r.ok) return fail(r);
@@ -236,11 +259,47 @@ export interface ChangePreviewDto {
 }
 export interface LookupItemDto { value: unknown; label: unknown }
 
+/// A database file from the browser, kept by the studio and answered as a connection.
+export const uploadConnectionFile = (file: File, name?: string): Promise<Connection> => {
+  const body = new FormData();
+  body.append("file", file);
+  if (name) body.append("name", name);
+
+  return fetch(`${base}/connections/file`, { method: "POST", body }).then(r => ok<Connection>(r));
+};
+
+/// What the studio's own `?u=` named. The server decides what is allowed and answers per entry,
+/// so one refused database does not keep the others closed.
+export const openFromUrl = (u: string): Promise<{ opened: OpenedConnection[] }> =>
+  fetch(`${base}/connections/from-url`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ u }),
+  }).then(r => ok<{ opened: OpenedConnection[] }>(r));
+
+export interface BrowseDto {
+  /// Null when nothing has been opened yet: the roots are where a picker starts.
+  path: string | null;
+  roots: string[];
+  parent: string | null;
+  directories: { name: string; path: string }[];
+  /// `engine` is null for a file no driver here reads — listed anyway, so nobody wonders where it went.
+  files: { name: string; path: string; size: number; engine: string | null }[];
+}
+
+/// What the server can see, inside the folders it is allowed to read.
+export const browseFiles = (path?: string): Promise<BrowseDto> =>
+  fetch(`${base}/connections/browse${path ? `?path=${encodeURIComponent(path)}` : ""}`)
+    .then(r => ok<BrowseDto>(r));
+
 export const browseData = (conn: string, ref: string,
   params: { offset?: number; limit?: number; sort?: string; desc?: boolean;
             filterColumn?: string; filter?: string; reveal?: boolean;
             /// "customer_id.name": a column from the table that foreign key points at.
-            lookups?: string[] } = {}): Promise<DataPageDto> => {
+            lookups?: string[];
+            /// What an engine's own query builder put together, in that engine's language: the
+            /// OData builder's $select, $expand, $filter and $orderby. The grid still pages.
+            options?: string } = {}): Promise<DataPageDto> => {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (key === "lookups") continue;
@@ -270,6 +329,8 @@ export interface BrowseRequest {
   aggregates?: BrowseAggregate[];
   /// Borrowed columns, "customer_id.name" each — the same spelling browseData's lookups take.
   lookups?: string[];
+  /// Query options an engine builds its own page from — the OData builder's `$filter` and friends.
+  options?: string;
 }
 
 /// The same page browseData answers, with several filters, several sort columns, joins along the

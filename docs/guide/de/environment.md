@@ -50,10 +50,12 @@
 WDS_CONN_SHOP=postgres://app:pw@db:5432/shop
 WDS_CONN_CACHE=redis://cache:6379
 WDS_CONN_LOCAL=sqlite:///data/local.db
+WDS_CONN_NORTHWIND=https://services.odata.org/V4/Northwind/Northwind.svc/
 ```
 
 Erkannte Schemata: `postgres`, `postgresql`, `mysql`, `mariadb`, `sqlserver`, `mssql`, `sqlite`,
-`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`.
+`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`. Eine `http`- oder `https`-URL ist die
+Service-Root eines OData-Dienstes.
 
 **Mehrere Pfade in einer Einstellung.** `WDS_SAVED_QUERIES_DIR`, `WDS_EXPORT_TEMPLATES_DIR`,
 `WDS_QUALITY_FILE`, `WDS_SEED_SQL`, `WDS_CONNECTIONS_FILE`, `WDS_MASK_FILE`,
@@ -101,6 +103,36 @@ die Verbindung übersprungen — besser, als sie am falschen Treiber anzuhängen
 abgelehnt, bevor es die Datenbank erreicht. `color` färbt die Zeile der Verbindung im Explorer —
 die billigste Art, einen Produktionsunfall zu verhindern.
 
+## Dateien als Verbindungen
+
+```bash
+WDS_FILE_ROOTS=/mnt/share,/srv/exports
+```
+
+Die Ordner, aus denen das Studio Dateien lesen darf, zusätzlich zu seinem eigenen
+Datenverzeichnis. Sie sind das, was der Picker **Browse the server** anbietet, und die einzigen
+Pfade, die ein `?u=`-Dateieintrag nennen darf; `..` wird vor der Prüfung aufgelöst, und ein Ordner,
+dessen Name nur wie eine Wurzel beginnt, liegt nicht darin. Standardmäßig leer, damit bleibt das
+Datenverzeichnis die einzige Wurzel.
+
+## Verbindungen aus der URL des Studios
+
+`https://studio.example/?u=…` öffnet die Datenbanken, die der Link nennt — ein Live-Viewer für
+Datenbanken. Standardmäßig aus; wie ein Link aussieht, steht unter
+[Verbindungen](./connections.md#ein-link-der-eine-verbindung-öffnet).
+
+| Variable | Standard | Wirkung |
+| --- | --- | --- |
+| `WDS_OPEN_FROM_URL` | `false` | Was ein Link mitbringen darf: `false`, `true` (= `file,download`) oder eine kommagetrennte Liste aus `file`, `download`, `connection-string` |
+| `WDS_OPEN_FROM_URL_HOSTS` | leer | Die Hosts, von denen ein Download kommen darf, kommagetrennt; `*.example.com` trifft eine Subdomain-Ebene. Leer heißt kein Download, egal was der Schalter sagt |
+| `WDS_OPEN_FROM_URL_KEEP` | `session` | `session` behält die Verbindung für den Browser, der sie geöffnet hat, und schreibt nichts auf; `store` schreibt sie in den Verbindungs-Store, für alle sichtbar |
+| `WDS_OPEN_FROM_URL_WRITABLE` | `false` | Ob eine aus einem Link geöffnete Verbindung schreiben darf |
+| `WDS_OPEN_FROM_URL_MAX_MB` | `512` | Die größte Datei, die ein Download holen darf |
+
+`true` bedeutet bewusst `file,download` und nie `connection-string`: eine Verbindungszeichenfolge in
+einer URL ist ein Passwort in der Browser-History, in Proxy-Logs und auf Screenshots und muss darum
+absichtlich genannt werden.
+
 ## Anmeldung über einen Provider
 
 ```bash
@@ -131,6 +163,23 @@ dem Haus getragen hat — ein ausgeführtes Statement, ein Export, ein angewende
 abgelehnter Zugriff — mit Person, Verbindung und Ergebnis. Zu lesen ist das im Tab **Audit** der
 Administration, der wie alles unter `/api/admin` die Admin-Rolle braucht. Anfragebodies werden nie
 mitgeschrieben: in einem Verbindungsbody steht ein Passwort.
+
+## Was Leute in diesem Studio dürfen
+
+Wohin eine Verbindung geht, die jemand anlegt, und welche Wege hinein es überhaupt gibt. Jeder
+Standard ist das, was das Studio vor diesen Einstellungen getan hat — siehe
+[Verbindungen](./connections.md#ein-studio-zu-dem-jeder-seine-eigenen-daten-mitbringt).
+
+| Variable | Standard | Wirkung |
+| --- | --- | --- |
+| `WDS_CONNECTION_SCOPE` | `stored` | `stored` schreibt eine neue Verbindung für alle in den Store; `session` hält sie für den Browser, der sie angelegt hat, und schreibt nichts auf |
+| `WDS_ALLOW_ADD_CONNECTION` | `true` | Ob eine Verbindungszeichenfolge getippt, eingefügt, importiert oder getestet werden darf |
+| `WDS_ALLOW_FILE_UPLOAD` | `true` | Ob eine Datenbankdatei aus dem Browser gesendet werden darf |
+| `WDS_ALLOW_FILE_BROWSE` | `true` | Ob die Server-Ordner durchsucht werden dürfen |
+| `WDS_SESSION_TTL_MINUTES` | `240` | Wie lange eine Sitzung still sein darf, bevor ihre Verbindungen und Dateien verworfen werden. `0` läuft nie ab |
+| `WDS_SESSION_MAX_CONNECTIONS` | `25` | Wie viele Verbindungen ein Browser halten darf |
+| `WDS_UPLOAD_MAX_MB` | `100` | Die größte Datenbankdatei, die jemand senden darf |
+| `WDS_CONNECT_HOSTS` | leer | Die Hosts, zu denen dieses Studio überhaupt verbinden darf, kommagetrennt; `*.example.com` trifft eine Subdomain-Ebene. Leer heißt keine Einschränkung — setze sie bei allem, was Fremde erreichen können |
 
 ## Backups nach Zeitplan
 

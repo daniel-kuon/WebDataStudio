@@ -30,6 +30,14 @@ if (args.Contains("--install-storage-extensions"))
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 
+// An uploaded database may be large, and Kestrel's own default of 30 MB would refuse it with a
+// status code nobody here wrote. The studio's own cap is what decides — see WDS_UPLOAD_MAX_MB — so
+// both limits are raised to it and the endpoint answers for itself.
+var uploadMaxBytes = StudioAccess.From(builder.Configuration).UploadMaxBytes;
+builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = uploadMaxBytes + 1024 * 1024);
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(
+    o => o.MultipartBodyLengthLimit = uploadMaxBytes + 1024 * 1024);
+
 // Enums travel as their names: "Table", not 8. The SPA switches on these strings.
 builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
@@ -137,6 +145,14 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton(sp => new ConnectionStore(
     sp.GetRequiredService<IConfiguration>()["DB_PATH"] ?? defaultDbPath,
     sp.GetRequiredService<SecretProtector>()));
+builder.Services.AddSingleton<FileRoots>();
+builder.Services.AddSingleton<SessionConnections>();
+// Ends the sessions nobody came back to, and deletes what they brought with them.
+builder.Services.AddHostedService<SessionSweeper>();
+builder.Services.AddSingleton(sp => StudioAccess.From(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton(sp => ConnectHosts.From(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton(sp => UrlConnectionOptions.From(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<UrlConnectionOpener>();
 builder.Services.AddSingleton<ConnectionRegistry>();
 builder.Services.AddSingleton<MaskPolicyStore>();
 builder.Services.AddSingleton<UndoStore>();
@@ -209,6 +225,11 @@ if (telemetryOptions.Configured)
 builder.Services.AddHostedService(sp => sp.GetRequiredService<HealthAlerts>());
 builder.Services.AddHttpClient("alerts", client => client.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddHttpClient("assist", client => client.Timeout = TimeSpan.FromSeconds(60));
+// Fetching a database over http: long enough for a real file, and no redirects — a redirect is a
+// second host, and WDS_OPEN_FROM_URL_HOSTS is a list of hosts.
+builder.Services.AddHttpClient(UrlConnectionOpener.HttpClientName,
+        client => client.Timeout = TimeSpan.FromMinutes(10))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<DriverRegistry>();
 builder.Services.AddSingleton<TunnelManager>();
 builder.Services.AddSingleton(sp => new SessionPool(sp.GetRequiredService<IConfiguration>()));
@@ -376,6 +397,15 @@ app.UseStaticFiles();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Every request carries a key for the connections one browser opened from a link. Before the audit
+// trail and the guard, because both of them may already answer — and a connection that belongs to
+// this browser has to exist while they do.
+app.Use(async (ctx, next) =>
+{
+    ctx.RequestServices.GetRequiredService<SessionConnections>().Remember(SessionConnections.Key(ctx));
+    await next();
+});
+
 // Before the guard rather than after it: a refused request is a line worth having, and by here it is
 // already known who was refused.
 app.UseAuditTrail();
@@ -417,6 +447,8 @@ app.Use(async (ctx, next) =>
 
 app.MapAuthEndpoints();
 app.MapConnectionEndpoints();
+app.MapConnectionFileEndpoints();
+app.MapUrlConnectionEndpoints();
 app.MapSchemaEndpoints();
 app.MapQueryEndpoints();
 app.MapWorkspaceEndpoints();

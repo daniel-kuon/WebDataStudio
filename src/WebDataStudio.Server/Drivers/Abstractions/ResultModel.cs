@@ -51,7 +51,11 @@ public enum AnalyzeScope { Connection, Schema, Table, Query }
 /// "contains" — and each driver honours as much of it as its engine can. What it cannot do it says
 /// rather than pretending.
 public sealed record PageQuery(
-    int Offset, int Limit, string? Sort, bool Desc, string? FilterColumn, string? Filter);
+    int Offset, int Limit, string? Sort, bool Desc, string? FilterColumn, string? Filter,
+    /// What the engine's own query builder put together, in that engine's language — the OData
+    /// query builder's `$select`, `$expand`, `$filter` and `$orderby`. The grid still owns the
+    /// paging, and its column sort and filter win over the same option here.
+    string? Options = null);
 
 /// One page of rows from an engine that built it itself.
 public sealed record TabularPage(

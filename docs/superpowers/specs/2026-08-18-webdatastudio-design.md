@@ -414,6 +414,8 @@ it works for every engine whose capability set claims support for it.
 | F14.2 | Redis: key tree, type-specific editors, TTL, command console |
 | F14.3 | Result renderer as a JSON tree, switchable to a table for flat documents |
 | F14.7 | Look at a file rather than download it, through an on-demand viewer |
+| F14.4 | OData: entity sets from `$metadata`, queries as resource paths with query options, paged results |
+| F14.5 | A visual builder over an OData request, shared by the query tab and the data tab |
 
 ### F15 Documentation site
 | ID | Feature |
@@ -555,6 +557,13 @@ it works for every engine whose capability set claims support for it.
 | F30.41 | What a row looked like before, where the database itself kept it |
 | F30.42 | One setting, several paths: what a repository ships and what an app host wrote both count |
 | F30.43 | The rest of what a deployment brings: connections, the masking baseline, dashboards, snippets, the preferences a studio starts with |
+| F30.44 | A database file as a connection: uploaded or picked inside the folders the server may read |
+| F30.45 | Connections the studio opens from its own URL, off unless a deployment says otherwise |
+| F30.46 | Where a connection somebody adds goes: the shared store, or the browser that made it |
+| F30.47 | Which ways in a deployment leaves open: the form, an upload, the server's folders |
+| F30.48 | A session that ends: a lifetime, a ceiling, a sweeper, and a button to forget it now |
+| F30.49 | The hosts the studio may connect to at all, whatever the connection string says |
+| F30.50 | The empty state of a studio somebody brings their own data to |
 
 ## 10. Safety behaviour
 

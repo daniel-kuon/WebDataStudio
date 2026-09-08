@@ -100,6 +100,7 @@ table which columns, indexes and foreign keys came or went.
 
 ```bash
 WDS_SCHEMA_SNAPSHOT_DIR=/data/snapshots
+WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS=15   # how long that first sweep waits; 0 takes it right away
 ```
 
 - `GET /api/schema/{connection}/drift` — what moved, or `no change`.

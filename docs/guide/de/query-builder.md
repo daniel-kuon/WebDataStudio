@@ -67,3 +67,38 @@ in den Verlauf und in alles, wo man es einfügt.
 Ein handgeschriebenes Statement trägt keinen solchen Kommentar, und der Builder tut nicht so, als
 verstünde er es — es steckt kein SQL-Parser dahinter, und ein halb funktionierender wäre schlimmer
 als die ehrliche Grenze.
+
+## OData-Dienste
+
+Eine OData-Verbindung hat ihren eigenen Baukasten, weil es kein SQL zu erzeugen gibt: eine Anfrage
+ist ein Ressourcenpfad mit Query-Optionen, und die Form schreibt genau die. Der Zauberstab öffnet
+sie im Abfrage-Tab und im Daten-Tab — dieselbe Form über demselben Dienst, die im einen eine
+Anfrage füttert und im anderen das Gitter.
+
+Was sie anbietet, kommt aus dem `$metadata` des Dienstes, die Listen zeigen also, was existiert,
+und nicht, was richtig getippt wurde:
+
+- **Fields** ist `$select`. Nichts ausgewählt heißt alles, was die Entität hat.
+- **Expand** ist `$expand` und bietet die Navigation Properties der Entität an — die Relationen.
+  Eine expandierte Relation kommt als eine Spalte mit dem JSON, das der Dienst geschickt hat; der
+  Viewer des Gitters öffnet es als Baum.
+- **Filter** ist `$filter`, eine Zeile pro Bedingung: eine Property, ein Vergleich oder eines von
+  `contains`, `startswith` und `endswith`, und ein Wert. Ob der Wert in Anführungszeichen steht,
+  folgt dem Typ der Property: `20` auf einer Zahl ist `20`, auf einer Zeichenkette `'20'`. Zwei
+  oder mehr Zeilen werden mit einem `and` oder einem `or` verbunden.
+- **Order** ist `$orderby`, eine Zeile pro Property, aufsteigend oder absteigend.
+- **Top** und **Skip** gibt es nur im Abfrage-Tab: im Daten-Tab blättert das Gitter.
+
+Im Abfrage-Tab bleibt der Text im Editor die eine Wahrheit. Die Form wird daraus gelesen und dorthin
+zurückgeschrieben, Tippen und Klicken sind also dieselbe Geste auf zwei Weisen, und die Anfrage
+unter der Form ist die, die rausgeht.
+
+Ein `$filter`, den die Form nicht zerlegen kann — etwa `(A eq 1 or B eq 2) and C eq 3` — bleibt
+genau so stehen, wie er getippt wurde, in einem Feld, das das sagt. Auf dem Weg durch den Baukasten
+geht nichts verloren, und **Build it instead** räumt ihn weg, wenn die Zeilen zurück sollen.
+Optionen, für die die Form kein Feld hat, etwa `$apply`, reisen unverändert mit und sagen, dass sie
+behalten werden.
+
+Im Daten-Tab halten Form und Gitter beides: die eigene Sortierung einer Spalte oder ihr Filter
+gewinnt gegen dieselbe Option in der Form, und ein im Spaltenkopf getippter Filter wird mit `and` an
+den der Form angehängt.

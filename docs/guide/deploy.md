@@ -79,6 +79,42 @@ public studio without credentials hands every visitor whatever the connections b
 so set them, and consider `WDS_READONLY=true`, which is enforced in the driver rather than by
 hiding buttons.
 
+`WDS_OPEN_FROM_URL` is off for the same reason. A link that carries a connection string carries a
+password — into browser history, proxy logs and screenshots — which is why `true` allows a path and
+a download but never `connection-string`; that one has to be named on purpose. A download also
+needs `WDS_OPEN_FROM_URL_HOSTS`: a studio that fetches whatever address a link names is a way for a
+visitor to reach the addresses only the server can.
+
+### A studio anybody may use
+
+A viewer on the open internet is a deployment of its own: no accounts, no connections, and every
+visitor brings their own database.
+
+```yaml
+environment:
+  # What a visitor makes belongs to their browser and is written down nowhere.
+  WDS_CONNECTION_SCOPE: session
+  # A connection string and a file from their machine; the server's own folders stay private.
+  WDS_ALLOW_ADD_CONNECTION: "true"
+  WDS_ALLOW_FILE_UPLOAD: "true"
+  WDS_ALLOW_FILE_BROWSE: "false"
+  # A link that opens a database: ?u=… — never a connection string, which `true` leaves out anyway.
+  WDS_OPEN_FROM_URL: "true"
+  WDS_OPEN_FROM_URL_HOSTS: data.example
+  # Nothing is written through, and a session does not outlive the afternoon.
+  WDS_READONLY: "true"
+  WDS_SESSION_TTL_MINUTES: "120"
+  WDS_UPLOAD_MAX_MB: "50"
+  # Where the studio may connect at all. The one line not to leave out.
+  WDS_CONNECT_HOSTS: "*.example.com"
+```
+
+Two things to be honest about. Without `WDS_CONNECT_HOSTS` a visitor who may type a connection
+string can reach whatever the container can reach, which on most networks is more than you meant to
+offer — put the studio somewhere with restricted egress as well, because a list is a list and a
+network is a boundary. And there is no rate limiting: a public studio can be used to hammer a
+database somebody else owns, so put it behind whatever your proxy offers for that.
+
 ## Which build is running
 
 The version sits in the bottom right corner of the window, and its tooltip carries the commit and

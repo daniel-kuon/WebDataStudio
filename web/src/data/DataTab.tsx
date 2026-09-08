@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActionIcon, Alert, Badge, Button, Group, Loader, Menu, Select, Text, Tooltip,
+  ActionIcon, Alert, Badge, Button, Collapse, Group, Loader, Menu, Paper, Select, Text, Tooltip,
 } from "@mantine/core";
 import {
   IconArrowBackUp, IconArrowRight, IconChevronDown, IconChevronRight, IconClipboardPlus, IconCopy,
@@ -9,6 +9,8 @@ import {
   IconSortAscending, IconSortDescending, IconSquareArrowRight, IconTrash,
   IconSparkles, IconWand, IconBraces, IconHistory,
 } from "@tabler/icons-react";
+import { ODataQueryBuilder } from "../odata/ODataQueryBuilder";
+import { emptyQuery, type ODataQuery } from "../odata/query";
 import { copyAsCsv, copyAsJson, copyAsMarkdown, copyAsSqlInList } from "../export/copyAs";
 import {
   browseTable, countRows, getMaskPolicy, getUndoState, historyAvailable, lookupValues,
@@ -86,6 +88,9 @@ export interface DataTabProps {
   initialFilter?: { column: string; value: string } | null;
   /// Opens SQL in a query tab — the flatten of a JSON column goes there rather than running here.
   onOpenInEditor?: (sql: string) => void;
+  /// Which engine answers here. The grid is the same for all of them; an OData connection gets the
+  /// query builder on top, because a filter there is a query option rather than a WHERE clause.
+  engine?: string;
 }
 
 /// Whether this column is worth opening the JSON panel on: a declared JSON type, or a text column
@@ -101,7 +106,7 @@ function jsonish(dataType: string, values: unknown[]): boolean {
 
 export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], initialFilters,
   onFollowForeignKey, onOpenReferencing, fkNavMode, onFkNavModeChange, onExport,
-  initialFilter = null, onOpenInEditor }: DataTabProps) {
+  initialFilter = null, onOpenInEditor, engine }: DataTabProps) {
   // How many rows a page holds is a preference, not a constant: a wide table wants fewer.
   const { pageSize } = usePreferences();
   const [page, setPage] = useState<(DataPageDto & { grouped?: boolean }) | null>(null);
@@ -159,6 +164,13 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
   const [lookups, setLookups] = useState<string[]>([]);
   // Masking happens on the server, so revealing is a fresh request rather than a render flag.
   const [reveal, setReveal] = useState(false);
+  // The OData query builder: what it built, and whether it is open. `options` is what rides along
+  // with the page request — the grid keeps the paging, and a column's own sort or filter still
+  // wins over the same option here.
+  const [odata, setODataQuery] = useState<ODataQuery>(
+    () => emptyQuery(objectRef.split(":").slice(1).join(":")));
+  const [options, setOptions] = useState("");
+  const [builderOpen, setBuilderOpen] = useState(false);
 
   const columns = useMemo(() => page?.columns.map(c => c.name) ?? [], [page]);
 
@@ -227,6 +239,7 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
       offset: (pageIndex - 1) * pageSize, limit: pageSize,
       filters, sort: sorts, joins, groupBy, aggregates, lookups,
       reveal: reveal || undefined,
+      options: options || undefined,
     })
       .then(p => {
         if (cancelled) return;
@@ -245,11 +258,12 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
     // followColumn only tints rows; the fetch itself is driven by the states below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, objectRef, pageIndex, pageSize, nonce, filters, sorts, joins, groupBy,
-    aggregates, lookups, reveal]);
+    aggregates, lookups, reveal, options]);
 
   // A counted total describes one filter on one table. Anything that changes what is being read
   // makes it a number about something else.
-  useEffect(() => setExactTotal(null), [connectionId, objectRef, filters, joins, groupBy, aggregates, nonce]);
+  useEffect(() => setExactTotal(null),
+    [connectionId, objectRef, filters, joins, groupBy, aggregates, nonce, options]);
 
   // Re-read after every apply: what can be undone changes with the data, not with the render.
   useEffect(() => {
@@ -394,6 +408,14 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
           <ActionIcon size="sm" variant="subtle" aria-label="Revert" disabled={!changeSet.isDirty}
             onClick={changeSet.revertAll}><IconRestore size={14} /></ActionIcon>
         </Tooltip>
+        {/* The same builder the query tab has, over the same grid: what it puts together is sent
+            with the page, so the service does the filtering rather than the browser. */}
+        {engine === "odata" && (
+          <Tooltip label="Build the query: fields, relations, filter and order">
+            <ActionIcon size="sm" variant={builderOpen ? "light" : "subtle"} aria-label="Query builder"
+              onClick={() => setBuilderOpen(open => !open)}><IconWand size={14} /></ActionIcon>
+          </Tooltip>
+        )}
         {/* Following the table: the newest rows first, re-fetched, and whatever arrived since the
             last look tinted. Watch mode does this for a query; this is the table's version. */}
         {followable.length > 0 && (
@@ -569,18 +591,37 @@ export function DataTab({ connectionId, objectRef, tableName, foreignKeys = [], 
         </Text>
       </Group>
 
-      <QueryBar
-        columns={addressable}
-        foreignKeys={foreignKeys}
-        filters={filters} sorts={sorts} joins={joins} groupBy={groupBy} aggregates={aggregates}
-        onChange={next => {
-          if (next.filters) setFilters(next.filters);
-          if (next.sorts) setSorts(next.sorts);
-          if (next.joins) setJoins(next.joins);
-          if (next.groupBy) setGroupBy(next.groupBy);
-          if (next.aggregates) setAggregates(next.aggregates);
-          setPageIndex(1);
-        }} />
+      {/* An OData service has its own builder — a filter there is a query option, not a WHERE
+          clause, and there is nothing to join along. Everything else gets the query bar. */}
+      {engine !== "odata" && (
+        <QueryBar
+          columns={addressable}
+          foreignKeys={foreignKeys}
+          filters={filters} sorts={sorts} joins={joins} groupBy={groupBy} aggregates={aggregates}
+          onChange={next => {
+            if (next.filters) setFilters(next.filters);
+            if (next.sorts) setSorts(next.sorts);
+            if (next.joins) setJoins(next.joins);
+            if (next.groupBy) setGroupBy(next.groupBy);
+            if (next.aggregates) setAggregates(next.aggregates);
+            setPageIndex(1);
+          }} />
+      )}
+
+      {engine === "odata" && (
+        <Collapse expanded={builderOpen}>
+          <Paper withBorder mx={4} mb={4} radius="sm">
+            <ODataQueryBuilder connectionId={connectionId} variant="data" value={odata}
+              onChange={(query, built) => {
+                setODataQuery(query);
+                setOptions(built.options);
+                // A query that reads something else starts at its own beginning: page 14 of the
+                // old one is not page 14 of this one.
+                if (built.options !== options) setPageIndex(1);
+              }} />
+          </Paper>
+        </Collapse>
+      )}
 
       {pasteNote && (
         <Alert color="blue" p={6} mx={4} mb={4} withCloseButton onClose={() => setPasteNote(null)}>

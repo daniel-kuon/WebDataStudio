@@ -1,6 +1,8 @@
 namespace WebDataStudio.Server.Models;
 
-public enum ConnectionSource { Environment, Stored }
+/// Where a connection came from: a deployment's environment, the studio's own store, or a link
+/// somebody opened — the last one belongs to that browser and ends with its session.
+public enum ConnectionSource { Environment, Stored, Session }
 
 /// An SSH jump host in front of a database that is not reachable directly. Either a password or a
 /// private key, never both — the form offers one or the other.

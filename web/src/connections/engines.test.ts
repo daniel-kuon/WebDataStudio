@@ -14,6 +14,9 @@ describe("engineFromConnectionString", () => {
   it("detects a mongodb url", () =>
     expect(engineFromConnectionString("mongodb://db:27017/shop")).toBe("mongodb"));
 
+  it("treats an http url as an odata service", () =>
+    expect(engineFromConnectionString("https://services.odata.org/V4/Northwind/Northwind.svc/")).toBe("odata"));
+
   it("returns null for unrecognised text", () =>
     expect(engineFromConnectionString("hello world")).toBeNull());
 });
@@ -21,6 +24,6 @@ describe("engineFromConnectionString", () => {
 describe("ENGINES", () => {
   it("covers every engine the server accepts", () => {
     expect(ENGINES.map(e => e.id).sort()).toEqual(
-      ["clickhouse", "duckdb", "mongodb", "mysql", "oracle", "postgresql", "redis", "sqlite", "sqlserver"]);
+      ["clickhouse", "duckdb", "mongodb", "mysql", "odata", "oracle", "postgresql", "redis", "sqlite", "sqlserver"]);
   });
 });

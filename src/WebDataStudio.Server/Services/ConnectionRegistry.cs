@@ -14,6 +14,7 @@ public sealed class ConnectionRegistry
         // Object storage — S3, Azure Blob, Google Cloud Storage or a folder, told apart by the
         // connection's own URL rather than by a separate engine each.
         "storage",
+        "odata",
     ];
 
     private readonly IReadOnlyList<ConnectionSpec> _environment;
@@ -21,11 +22,21 @@ public sealed class ConnectionRegistry
     private readonly bool _forceReadOnly;
     // Absent in the few places that construct a registry outside the container.
     private readonly CurrentUser? _current;
+    private readonly SessionConnections? _sessions;
+    private readonly ConnectHosts? _hosts;
+    private readonly ILogger<ConnectionRegistry>? _log;
+    // Said once per connection rather than on every list: a studio asks for its connections often.
+    private readonly HashSet<string> _reported = [];
 
-    public ConnectionRegistry(IConfiguration config, ConnectionStore store, CurrentUser? current = null)
+    public ConnectionRegistry(IConfiguration config, ConnectionStore store,
+        CurrentUser? current = null, SessionConnections? sessions = null,
+        ConnectHosts? hosts = null, ILogger<ConnectionRegistry>? log = null)
     {
         _store = store;
         _current = current;
+        _sessions = sessions;
+        _hosts = hosts;
+        _log = log;
         _environment = EnvironmentConnections.Parse(
             config.AsEnumerable().ToDictionary(kv => kv.Key, kv => kv.Value));
         _forceReadOnly = string.Equals(config["WDS_READONLY"], "true", StringComparison.OrdinalIgnoreCase);
@@ -38,10 +49,28 @@ public sealed class ConnectionRegistry
     {
         var user = _current?.User;
 
-        return _environment.Concat(_store.List())
+        // Three sources: what the deployment wrote down, what somebody stored, and what this
+        // browser opened from a link. The last one is nobody else's.
+        return _environment.Concat(_store.List()).Concat(_sessions?.Current ?? [])
             .Where(c => user is null || user.MaySee(c.Id, c.Name))
+            // A host WDS_CONNECT_HOSTS does not name is not a connection this studio has: a
+            // connection written down before the list was set must not become the way around it.
+            .Where(Reachable)
             .Select(c => _forceReadOnly || user?.ReadOnly == true ? c with { ReadOnly = true } : c)
             .ToList();
+    }
+
+    /// Whether this studio may connect to the target at all. Refusals are logged once each, so a
+    /// deployment that narrows the list can see what it dropped instead of wondering.
+    private bool Reachable(ConnectionSpec spec)
+    {
+        if (_hosts?.Refuse(spec.Engine, spec.ConnectionString) is not { } refusal) return true;
+
+        lock (_reported)
+            if (_reported.Add(spec.Id))
+                _log?.LogWarning("connection {Name} is not offered: {Why}", spec.Name, refusal);
+
+        return false;
     }
 
     /// A connection by its id, or — when nothing has that id — by its name.

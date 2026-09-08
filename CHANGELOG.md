@@ -8,6 +8,83 @@ A section here is the body of that release: the release workflow reads the one t
 (`scripts/release-notes.mjs`) and the generated commit list follows it. So a new version is written
 down here *before* it is tagged — a tag with no section still publishes, with the commit list alone.
 
+## 1.5.0
+
+### A studio anybody brings their own data to
+
+Everything the studio did until now assumed one kind of deployment: somebody writes the connections
+down, a team opens the studio, everybody sees the same databases. This release adds the other one —
+a studio on the open internet as a viewer, where every visitor brings their own database and sees
+nobody else's. Nothing changes for the first kind: every default is what it was.
+
+- **Where a new connection goes.** `WDS_CONNECTION_SCOPE=session` holds what somebody makes for the
+  browser that made it: the form, an upload, an import and a `?u=` link all land there, nothing
+  reaches the store, and the next visitor's list is empty. `stored` is the default and is what the
+  studio always did.
+- **Which ways in exist at all.** `WDS_ALLOW_ADD_CONNECTION`, `WDS_ALLOW_FILE_UPLOAD` and
+  `WDS_ALLOW_FILE_BROWSE` each close one door — the form (including importing and testing a
+  connection, which opens whatever it is given), a file from the visitor's machine, and walking the
+  server's own folders. A closed door takes its button with it, and the refusal names the setting.
+  Useful well beyond a public studio: a deployment whose connections come from an app host can now
+  close the form and keep everything else.
+- **A session that ends.** `WDS_SESSION_TTL_MINUTES` (240, `0` for never) drops a session that has
+  gone quiet along with the files it brought; `WDS_SESSION_MAX_CONNECTIONS` (25) caps what one
+  browser holds; `WDS_UPLOAD_MAX_MB` (100) caps a file. **Forget my connections** throws the lot
+  away now, cookie included.
+- **The hosts the studio may reach.** `WDS_CONNECT_HOSTS` is checked at every door and against every
+  source, including connections from the store and the environment — a studio anybody may type a
+  connection string into is otherwise an outbound connector from wherever it runs. Empty by default,
+  which is no restriction; the deploy guide says why to set it.
+- **The empty state is the product.** With no connections the page says what to bring, listing only
+  the ways this deployment left open, and says once that what you open belongs to this browser.
+
+### Fixed
+
+- A session connection can be renamed and deleted by the browser that owns it. It used to refuse
+  with "opened from a link, nothing to delete", which was right while a link was the only way to
+  make one.
+- A `?u=` file entry can no longer name a path inside the uploads tree. Those folder names are GUIDs
+  and not guessable, but a path that leaked would have opened another visitor's database.
+- **Forget my connections** left the folder behind when the studio had already read the database:
+  the pool eviction was not waited for, and Microsoft.Data.Sqlite pools its own connections, so
+  handing one back does not close the file.
+
+## 1.4.0
+
+A database that is a file, and a link that opens one.
+
+### Connections
+
+- **A database file as a connection.** The **Add** form takes a SQLite or DuckDB file two ways:
+  uploaded from the browser — the way in for the file on the laptop in front of you, which the
+  container cannot see — or picked inside the folders the server may read, which `WDS_FILE_ROOTS`
+  names on top of the studio's own data directory. A Parquet, CSV, NDJSON or Excel file opens as a
+  storage connection over the folder it lies in, read-only whatever else is set. `.mdf` and Access
+  files are refused with the reason rather than a shrug.
+- **Connections the studio opens from its own URL.** `https://studio.example/?u=/data/shop.sqlite3`
+  opens the database when the page finishes loading, which makes the studio something like a live
+  viewer for databases. One `?u=` holds a comma-separated list, each entry a path, an `http(s)` URL
+  the studio fetches once, or a whole connection string, optionally labelled — and each entry
+  answers for itself, so a link with three databases in it opens the two it may and says in one
+  line why the third stayed closed.
+
+  Off by default. `WDS_OPEN_FROM_URL=true` means a path and a download and never a connection
+  string: that one has to be named on purpose, because a connection string in a URL is a password in
+  browser history, in proxy logs and in screenshots. A download needs the hosts it may fetch from in
+  `WDS_OPEN_FROM_URL_HOSTS` and stops at `WDS_OPEN_FROM_URL_MAX_MB` (512 by default). What a link
+  opens belongs to the browser that opened it — marked **from a link**, invisible to everybody else,
+  written down nowhere — unless `WDS_OPEN_FROM_URL_KEEP=store` says otherwise, and read-only unless
+  `WDS_OPEN_FROM_URL_WRITABLE=true`. The `u` parameter leaves the address bar as soon as the studio
+  has handed it over.
+
+### Fixed
+
+- The SQLite header check shared the file for reading only, which on Windows fails next to any
+  handle that may write — including the studio's own pooled connection to a file it had already
+  opened once.
+- The first schema-snapshot sweep waited a hard-coded quarter of a minute after start.
+  `WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS` now says how long it waits, and `0` takes it right away.
+
 ## 1.3.0
 
 The image, the desktop builds and the Aspire integration all come from this tag.

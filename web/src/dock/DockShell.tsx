@@ -55,12 +55,13 @@ import {
 } from "../sql/objectScripts";
 import {
   applyDdl, archiveUrl, deleteObject, describeObject, listConnections, loadTabs, loadWorkspaceItem,
-  objectUrl, previewObject,
+  objectUrl, openFromUrl, previewObject,
   previewRename, previewComment, previewDrop, previewSchemaChange, previewTriggerState,
   refreshStatement, saveTabs, saveWorkspaceItem, uploadObject,
   type BrowseFilter, type Connection, type ForeignKeyDto, type DependencyReportDto,
   type ReferencingKeyDto,
 } from "../api";
+import { announce, parameterFrom, withoutParameter } from "../connections/openFromUrl";
 import { ExportDialog, type ExportTarget } from "../export/ExportDialog";
 import { CopyTableDialog, ImportDialog, type ImportTarget } from "../import/ImportDialog";
 import { NewTableDialog } from "../import/NewTableDialog";
@@ -191,6 +192,7 @@ function DataPanel(props: IDockviewPanelProps<{ tabId: string }>) {
       fkNavMode={shell.fkNavMode}
       onFkNavModeChange={shell.setFkNavMode}
       initialFilter={tab.filter ?? null}
+      engine={shell.explorer.engineOf(tab.connectionId)}
       // The flatten of a JSON column is SQL, so it goes to a query tab rather than running here.
       onOpenInEditor={sql => shell.runStatement(tab.connectionId, sql)}
       onFollowForeignKey={(fk, value) => shell.followForeignKey(tab, fk, value)}
@@ -552,7 +554,25 @@ export function DockShell() {
   // Held here, not in the modal: the Ctrl+L chord has to reach the same list the modal numbers.
   const { presets, save: savePresets } = useLayoutPresets();
 
-  useEffect(() => { listConnections().then(setConnections).catch(() => setConnections([])); }, []);
+  // What the studio's own URL named comes first, so the list already holds it. The server decides
+  // whether anything is allowed at all; here the parameter is only handed over and then dropped from
+  // the address, because a reload should not carry a password around a second time.
+  useEffect(() => {
+    const parameter = parameterFrom(location.search);
+
+    const list = () => listConnections().then(setConnections).catch(() => setConnections([]));
+
+    if (!parameter) { void list(); return; }
+
+    history.replaceState(null, "", withoutParameter(location.pathname, location.search));
+
+    openFromUrl(parameter)
+      .then(({ opened }) => {
+        for (const line of announce(opened)) notifications.show({ color: "yellow", message: line });
+      })
+      .catch(e => notifications.show({ color: "red", message: String(e.message ?? e) }))
+      .finally(list);
+  }, []);
 
   // Preferences are read once; everything that reads them subscribes to the same copy.
   useEffect(() => { void loadPreferences(); }, []);
@@ -887,7 +907,8 @@ export function DockShell() {
           break;
         }
 
-        newTab(s.connectionId, `SELECT * FROM ${name}`);
+        // An OData entity set is queried by URL, not by SELECT.
+        newTab(s.connectionId, engine === "odata" ? `${s.node.label}?$top=100` : `SELECT * FROM ${name}`);
         break;
 
       case "import-object":

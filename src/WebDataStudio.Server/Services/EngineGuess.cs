@@ -16,6 +16,8 @@ public static class EngineGuess
             || value.StartsWith("mongodb+srv://", StringComparison.OrdinalIgnoreCase)) return "mongodb";
         if (value.StartsWith("redis://", StringComparison.OrdinalIgnoreCase)
             || value.StartsWith("rediss://", StringComparison.OrdinalIgnoreCase)) return "redis";
+        if (value.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return "odata";
 
         var parts = value.Split(';', StringSplitOptions.RemoveEmptyEntries)
             .Select(p => p.Split('=', 2))

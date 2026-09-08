@@ -27,6 +27,10 @@ public static class ConnectionUrl
         ["gs"] = "storage",
         ["gcs"] = "storage",
         ["file"] = "storage",
+
+        // An OData service is addressed by the plain URL of its service root.
+        ["http"] = "odata",
+        ["https"] = "odata",
     };
 
     private static readonly Dictionary<string, int> DefaultPorts = new(StringComparer.OrdinalIgnoreCase)
@@ -50,6 +54,7 @@ public static class ConnectionUrl
     {
         // Document databases keep their own URL format; their drivers parse it directly.
         if (engine is "mongodb" or "redis") return url.ToString().TrimEnd('/');
+        if (engine is "odata") return url.ToString();
 
         // File-backed engines carry a path, not a host.
         if (engine is "sqlite" or "duckdb") return $"Data Source={url.LocalPath}";

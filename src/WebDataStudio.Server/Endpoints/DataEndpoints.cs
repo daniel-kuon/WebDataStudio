@@ -21,7 +21,9 @@ public static class DataEndpoints
         List<BrowseFilterDto>? Filters, List<BrowseSortDto>? Sort, List<string>? Joins,
         List<string>? GroupBy, List<BrowseAggregateDto>? Aggregates,
         /// Borrowed columns, "customer_id.name" each — the same spelling the GET's lookup takes.
-        List<string>? Lookups);
+        List<string>? Lookups,
+        /// Query options an engine builds its own page from — what the OData builder produced.
+        string? Options = null);
 
     public record ChangeDto(string Kind, Dictionary<string, JsonElement> Key, Dictionary<string, JsonElement> Values);
     public record ChangeRequest(List<ChangeDto> Changes);
@@ -178,8 +180,8 @@ public static class DataEndpoints
 
         app.MapGet("/api/data/{conn}", async (string conn, [FromQuery(Name = "ref")] string objectRef,
             int? offset, int? limit, string? sort, bool? desc, string? filterColumn, string? filter,
-            bool? reveal, [FromQuery(Name = "lookup")] string[]? lookup, SessionFactory factory,
-            MaskPolicyStore policies, CancellationToken ct) =>
+            bool? reveal, [FromQuery(Name = "lookup")] string[]? lookup, string? options,
+            SessionFactory factory, MaskPolicyStore policies, CancellationToken ct) =>
         {
             try
             {
@@ -191,8 +193,8 @@ public static class DataEndpoints
                     if (!driver.Caps.TabularBrowse)
                         return Results.BadRequest(new
                         {
-                            message = $"{driver.Info.Label} has no rows to browse; open the key in " +
-                                      "the key browser instead",
+                            message = $"{driver.Info.Label} has no rows to browse here; open the " +
+                                      "object in its own browser or a query tab instead",
                         });
 
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
@@ -204,7 +206,7 @@ public static class DataEndpoints
                     // own contents. Asked before anything else, because none of what follows -
                     // a FROM clause, a WHERE, an ORDER BY - exists for them.
                     if (await driver.PageAsync(session, target,
-                            new PageQuery(skip, take, sort, desc == true, filterColumn, filter), ct)
+                            new PageQuery(skip, take, sort, desc == true, filterColumn, filter, options), ct)
                         is { } built)
                     {
                         var hidden = reveal == true
@@ -368,6 +370,43 @@ public static class DataEndpoints
                         });
 
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
+                    var take = Math.Clamp(body.Limit ?? defaultLimit, 1, 100_000);
+                    var skip = Math.Max(body.Offset ?? 0, 0);
+
+                    // An engine that has no SQL builds its own page — an OData entity set, a
+                    // MongoDB collection. There is no FROM clause to join to and no WHERE to add
+                    // to, so it answers here, exactly as it does on the plain browse: the first
+                    // column box and the first sort travel as its own query, and the rest of the
+                    // query bar has nothing to say about it.
+                    var box = input0(body);
+                    if (await driver.PageAsync(session, target,
+                            new PageQuery(skip, take, box.Sort, box.Desc, box.FilterColumn,
+                                box.Filter, body.Options), ct)
+                        is { } built)
+                    {
+                        var hidden = body.Reveal == true
+                            ? []
+                            : Masking.IndexesOf(built.Columns, policies.For(conn));
+
+                        return Results.Ok(new
+                        {
+                            columns = Masking.Describe(built.Columns, hidden),
+                            rows = Masking.Apply(built.Rows, hidden),
+                            editable = built.Editable && !session.Spec.ReadOnly,
+                            keyColumns = Array.Empty<string>(),
+                            reason = session.Spec.ReadOnly ? "this connection is read-only" : built.Reason,
+                            totalEstimate = built.Total,
+                            // The engine counted this one itself, for this query.
+                            totalIsEstimate = false,
+                            filtered = box.FilterColumn is { Length: > 0 },
+                            lookups = Array.Empty<string>(),
+                            offset = skip,
+                            limit = take,
+                            grouped = false,
+                            note = built.Note,
+                        });
+                    }
+
                     var detail = await driver.DescribeAsync(session, target, ct);
                     var identity = RowIdentity.Resolve(detail, driver.Dialect);
 
@@ -435,8 +474,6 @@ public static class DataEndpoints
                         [.. (body.Aggregates ?? []).Select(a => new BrowseAggregate(a.Function, a.Column))]);
 
                     var grouped = input.GroupBy.Count > 0 || input.Aggregates.Count > 0;
-                    var take = Math.Clamp(body.Limit ?? defaultLimit, 1, 100_000);
-                    var skip = Math.Max(body.Offset ?? 0, 0);
 
                     var (text, parameters) = BrowseQuery.Build(
                         ChangeScriptBuilder.Qualify(target, driver.Dialect), detail, joins, lookups,
@@ -1161,6 +1198,18 @@ public static class DataEndpoints
         }
 
         return lookups;
+    }
+
+    /// What a self-paging engine can be told of a query-bar request: its first column box and its
+    /// first sort. Joins, grouping and further filters have no equivalent in a `$filter` or a
+    /// `find()`, and inventing one would answer a different question than the bar shows.
+    private static (string? Sort, bool Desc, string? FilterColumn, string? Filter) input0(
+        BrowseRequestDto body)
+    {
+        var sort = (body.Sort ?? []).FirstOrDefault();
+        var filter = (body.Filters ?? []).FirstOrDefault(f => f.Value is { Length: > 0 });
+
+        return (sort?.Column, sort?.Desc == true, filter?.Column, filter?.Value);
     }
 
     /// The type name every engine accepts in a CAST to text.

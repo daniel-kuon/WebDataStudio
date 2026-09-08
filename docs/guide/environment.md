@@ -33,6 +33,7 @@
 | `WDS_BACKUP_DIR` | where those dumps go. `/data/backups` by default — mount a volume there |
 | `WDS_FILE_VIEWER_URL` | where the rich file viewer is fetched from when somebody looks at a file in a bucket. Defaults to the public CDN; empty switches it off |
 | `WDS_SCHEMA_SNAPSHOT_DIR` | snapshot every connection's schema on start and report the drift — see [Schema editing](schema.md) |
+| `WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS` | how long the first sweep waits after start, 15 by default. `0` takes it right away |
 | `WDS_ARCHIVE_DIR`, `WDS_ARCHIVE_MAX_ROWS` | where kept results are written, and how many rows one keeps — see [Results and export](results.md) |
 | `WDS_ALERT_WEBHOOK`, `WDS_ALERT_INTERVAL_MINUTES`, `WDS_ALERT_MIN_SEVERITY`, `WDS_ALERT_CONNECTIONS` | post new health findings to a webhook — see [Administration](administration.md) |
 | `WDS_PUBLIC_URL` | where this studio can be reached from outside, so an alert can link back to what it is about |
@@ -107,10 +108,11 @@ register with the provider is `https://<your studio>/signin-oidc`.
 WDS_CONN_SHOP=postgres://app:pw@db:5432/shop
 WDS_CONN_CACHE=redis://cache:6379
 WDS_CONN_LOCAL=sqlite:///data/local.db
+WDS_CONN_NORTHWIND=https://services.odata.org/V4/Northwind/Northwind.svc/
 ```
 
 Recognised schemes: `postgres`, `postgresql`, `mysql`, `mariadb`, `sqlserver`, `mssql`, `sqlite`,
-`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`.
+`oracle`, `duckdb`, `clickhouse`, `mongodb`, `redis`. An `http` or `https` URL is an OData service root.
 
 ## Connections as provider connection strings
 
@@ -143,6 +145,52 @@ if the guess fails — better than attaching it to the wrong driver.
 `readOnly` is enforced in the driver, not only in the UI: a statement that is not a read is
 rejected before it reaches the database. `color` tints the connection's row in the explorer, which
 is the cheapest way to stop a production accident.
+
+## Files as connections
+
+```bash
+WDS_FILE_ROOTS=/mnt/share,/srv/exports
+```
+
+The folders the studio may read files from, on top of its own data directory. They are what the
+**Browse the server** picker offers and the only paths a `?u=` file entry may name; `..` is
+resolved before the check, and a folder whose name merely starts like a root is not inside it.
+Empty by default, which leaves the data directory as the only root.
+
+## Connections from the studio's own URL
+
+`https://studio.example/?u=…` opens the databases the link names — a live viewer for databases.
+Off by default; see [Connections](./connections.md#a-link-that-opens-a-connection) for what a link
+looks like.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `WDS_OPEN_FROM_URL` | `false` | What a link may carry: `false`, `true` (= `file,download`), or a comma-separated list of `file`, `download`, `connection-string` |
+| `WDS_OPEN_FROM_URL_HOSTS` | empty | The hosts a download may come from, comma-separated; `*.example.com` matches one level of subdomain. Empty means no download, whatever the switch says |
+| `WDS_OPEN_FROM_URL_KEEP` | `session` | `session` keeps the connection for the browser that opened it and writes nothing down; `store` writes it to the connection store, visible to everybody |
+| `WDS_OPEN_FROM_URL_WRITABLE` | `false` | Whether a connection opened from a link may write |
+| `WDS_OPEN_FROM_URL_MAX_MB` | `512` | The largest file a download may fetch |
+
+`true` deliberately means `file,download` and never `connection-string`: a connection string in a
+URL is a password in browser history, in proxy logs and in screenshots, so it has to be named on
+purpose.
+
+## What people may do in this studio
+
+Where a connection somebody makes goes, and which ways in exist at all. Every default is what the
+studio did before these settings existed — see
+[Connections](./connections.md#a-studio-anybody-brings-their-own-data-to).
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `WDS_CONNECTION_SCOPE` | `stored` | `stored` writes a new connection to the store for everybody; `session` holds it for the browser that made it and writes nothing down |
+| `WDS_ALLOW_ADD_CONNECTION` | `true` | Whether a connection string may be typed, pasted, imported or tested |
+| `WDS_ALLOW_FILE_UPLOAD` | `true` | Whether a database file may be sent from the browser |
+| `WDS_ALLOW_FILE_BROWSE` | `true` | Whether the server's own folders may be walked |
+| `WDS_SESSION_TTL_MINUTES` | `240` | How long a session may go quiet before its connections and files are dropped. `0` never expires |
+| `WDS_SESSION_MAX_CONNECTIONS` | `25` | How many connections one browser may hold |
+| `WDS_UPLOAD_MAX_MB` | `100` | The largest database file somebody may send |
+| `WDS_CONNECT_HOSTS` | empty | The hosts this studio may connect to at all, comma-separated; `*.example.com` matches one level of subdomain. Empty is no restriction — set it on anything a stranger can reach |
 
 ## Backups on a schedule
 

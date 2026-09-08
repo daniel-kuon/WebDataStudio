@@ -118,6 +118,7 @@ entfernte Tabellen, und je Tabelle, welche Spalten, Indizes und Fremdschlüssel 
 
 ```bash
 WDS_SCHEMA_SNAPSHOT_DIR=/data/snapshots
+WDS_SCHEMA_SNAPSHOT_DELAY_SECONDS=15   # wie lange die erste Runde wartet; 0 nimmt sie sofort
 ```
 
 Die erste Momentaufnahme ist eine Grundlinie, keine Änderung; jede weitere ist die Grundlinie der

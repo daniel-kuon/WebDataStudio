@@ -4,9 +4,10 @@ import {
   Textarea, TextInput,
 } from "@mantine/core";
 import { ENGINES, engineFromConnectionString } from "./engines";
+import { FilePicker } from "./FilePicker";
 import {
   connectionPresets, testConnection,
-  type ConnectionInput, type ConnectionPresetDto, type TunnelInput,
+  type Connection, type ConnectionInput, type ConnectionPresetDto, type TunnelInput,
 } from "../api";
 
 const TLS_MODES = ["default", "disable", "prefer", "require", "verify-ca", "verify-full"];
@@ -30,10 +31,13 @@ function withSslMode(connectionString: string, engine: string, mode: string): st
   return mode === "default" ? parts.join(";") : [...parts, `${key}=${value}`].join(";");
 }
 
-export function ConnectionForm({ initial, onSubmit, onCancel }: {
+export function ConnectionForm({ initial, onSubmit, onCancel, onCreated }: {
   initial?: ConnectionInput;
   onSubmit: (value: ConnectionInput) => Promise<void>;
   onCancel: () => void;
+  /// An uploaded file is already a connection when the server answers, so there is no form left to
+  /// submit. Absent while editing: the file half is for new connections.
+  onCreated?: (created: Connection) => void;
 }) {
   const [value, setValue] = useState<ConnectionInput>(initial ?? {
     name: "", engine: "postgresql", connectionString: "", readOnly: false,
@@ -68,9 +72,24 @@ export function ConnectionForm({ initial, onSubmit, onCancel }: {
 
   return (
     <Stack>
+      {/* A database that is a file is the one case where nothing has to be typed: name the file and
+          the studio knows the engine, the connection string and whether it may be written to. */}
+      {onCreated && (
+        <FilePicker
+          onUploaded={onCreated}
+          onPicked={(path, engine) => setValue(v => ({
+            ...v,
+            engine: engine === "storage" ? "storage" : engine ?? v.engine,
+            connectionString: engine === "storage" ? path : `Data Source=${path}`,
+            name: v.name.length > 0 ? v.name : path.split(/[\/]/).pop() ?? v.name,
+          }))} />
+      )}
+
       <TextInput label="Name" value={value.name} required
         onChange={e => { const name = e.currentTarget.value; setValue(v => ({ ...v, name })); }} />
-      <Select label="Engine" data={ENGINES.map(e => ({ value: e.id, label: e.label }))}
+      <Select label="Engine" searchable nothingFoundMessage="No such engine" maxDropdownHeight={320}
+        data={[...ENGINES].sort((a, b) => a.label.localeCompare(b.label))
+          .map(e => ({ value: e.id, label: e.label }))}
         value={value.engine} onChange={id => id && setValue(v => ({ ...v, engine: id }))} />
 
       {presets.length > 0 &&

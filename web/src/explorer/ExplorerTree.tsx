@@ -319,6 +319,11 @@ export function ExplorerTree({ refresh = 0, onSelect, onAction, onDropFiles }: {
                   <Text size="xs" fw={600} c={c.color ?? undefined} truncate>{c.name}</Text>
                   {c.readOnly && <Badge size="xs" variant="light" color="orange">RO</Badge>}
                   {c.tunnelled && <Badge size="xs" variant="light" color="blue">SSH</Badge>}
+                  {/* Opened from a link: it belongs to this browser and ends with the session, so
+                      saying so beats wondering why nobody else can see it. */}
+                  {c.source === "Session" && (
+                    <Badge size="xs" variant="light" color="grape">from a link</Badge>
+                  )}
                 </Group>
               </UnstyledButton>
 
