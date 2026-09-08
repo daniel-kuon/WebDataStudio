@@ -20,12 +20,14 @@ export const ENGINES: EngineDef[] = [
   { id: "clickhouse", label: "ClickHouse", defaultPort: 8123, fields: server },
   { id: "mongodb", label: "MongoDB", defaultPort: 27017, fields: server },
   { id: "redis", label: "Redis", defaultPort: 6379, fields: server },
+  { id: "odata", label: "OData", defaultPort: 443, fields: [{ key: "host", label: "Service URL" }] },
 ];
 
 const URL_SCHEMES: Record<string, string> = {
   postgres: "postgresql", postgresql: "postgresql", mysql: "mysql", mariadb: "mysql",
   sqlserver: "sqlserver", mssql: "sqlserver", sqlite: "sqlite", oracle: "oracle",
   duckdb: "duckdb", clickhouse: "clickhouse", mongodb: "mongodb", redis: "redis",
+  http: "odata", https: "odata",
 };
 
 // Lets a pasted connection string pick the engine, so the user does not have to.

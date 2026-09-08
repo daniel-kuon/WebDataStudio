@@ -414,6 +414,8 @@ it works for every engine whose capability set claims support for it.
 | F14.2 | Redis: key tree, type-specific editors, TTL, command console |
 | F14.3 | Result renderer as a JSON tree, switchable to a table for flat documents |
 | F14.7 | Look at a file rather than download it, through an on-demand viewer |
+| F14.4 | OData: entity sets from `$metadata`, queries as resource paths with query options, paged results |
+| F14.5 | A visual builder over an OData request, shared by the query tab and the data tab |
 
 ### F15 Documentation site
 | ID | Feature |

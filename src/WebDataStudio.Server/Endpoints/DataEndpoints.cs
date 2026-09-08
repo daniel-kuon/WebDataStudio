@@ -168,8 +168,8 @@ public static class DataEndpoints
 
         app.MapGet("/api/data/{conn}", async (string conn, [FromQuery(Name = "ref")] string objectRef,
             int? offset, int? limit, string? sort, bool? desc, string? filterColumn, string? filter,
-            bool? reveal, [FromQuery(Name = "lookup")] string[]? lookup, SessionFactory factory,
-            MaskPolicyStore policies, CancellationToken ct) =>
+            bool? reveal, [FromQuery(Name = "lookup")] string[]? lookup, string? options,
+            SessionFactory factory, MaskPolicyStore policies, CancellationToken ct) =>
         {
             try
             {
@@ -181,8 +181,8 @@ public static class DataEndpoints
                     if (!driver.Caps.TabularBrowse)
                         return Results.BadRequest(new
                         {
-                            message = $"{driver.Info.Label} has no rows to browse; open the key in " +
-                                      "the key browser instead",
+                            message = $"{driver.Info.Label} has no rows to browse here; open the " +
+                                      "object in its own browser or a query tab instead",
                         });
 
                     var target = SchemaEndpoints.ParseObjectRef(objectRef);
@@ -194,7 +194,7 @@ public static class DataEndpoints
                     // own contents. Asked before anything else, because none of what follows -
                     // a FROM clause, a WHERE, an ORDER BY - exists for them.
                     if (await driver.PageAsync(session, target,
-                            new PageQuery(skip, take, sort, desc == true, filterColumn, filter), ct)
+                            new PageQuery(skip, take, sort, desc == true, filterColumn, filter, options), ct)
                         is { } built)
                     {
                         var hidden = reveal == true

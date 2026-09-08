@@ -87,7 +87,9 @@ export function ConnectionForm({ initial, onSubmit, onCancel, onCreated }: {
 
       <TextInput label="Name" value={value.name} required
         onChange={e => { const name = e.currentTarget.value; setValue(v => ({ ...v, name })); }} />
-      <Select label="Engine" data={ENGINES.map(e => ({ value: e.id, label: e.label }))}
+      <Select label="Engine" searchable nothingFoundMessage="No such engine" maxDropdownHeight={320}
+        data={[...ENGINES].sort((a, b) => a.label.localeCompare(b.label))
+          .map(e => ({ value: e.id, label: e.label }))}
         value={value.engine} onChange={id => id && setValue(v => ({ ...v, engine: id }))} />
 
       {presets.length > 0 &&

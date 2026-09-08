@@ -180,6 +180,7 @@ function DataPanel(props: IDockviewPanelProps<{ tabId: string }>) {
       tableName={tab.tableName}
       foreignKeys={tab.foreignKeys}
       initialFilter={tab.filter ?? null}
+      engine={shell.explorer.engineOf(tab.connectionId)}
       // The flatten of a JSON column is SQL, so it goes to a query tab rather than running here.
       onOpenInEditor={sql => shell.runStatement(tab.connectionId, sql)}
       onFollowForeignKey={(fk, value) => shell.followForeignKey(tab, fk, value)}
@@ -832,7 +833,8 @@ export function DockShell() {
           break;
         }
 
-        newTab(s.connectionId, `SELECT * FROM ${name}`);
+        // An OData entity set is queried by URL, not by SELECT.
+        newTab(s.connectionId, engine === "odata" ? `${s.node.label}?$top=100` : `SELECT * FROM ${name}`);
         break;
 
       case "import-object":
